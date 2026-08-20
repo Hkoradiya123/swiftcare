@@ -11,7 +11,8 @@
 // appointment_kind: 'in_person' | 'telehealth'
 // appointment_state: 'scheduled' | 'checked_in' | 'in_progress' | 'completed' | 'cancelled' | 'no_show'
 // prescription_state: 'active' | 'completed' | 'cancelled'
-// allergy_severity: 'mild' | 'moderate' | 'severe'
+// allergy_severity: 'mild' | 'moderate' | 'severe' | 'life_threatening'
+// allergy_type: 'drug' | 'food' | 'environmental'
 // reminder_kind: '24h' | '2h'
 // document_kind: 'visit_summary' | 'prescription' | 'lab_report'
 
@@ -198,18 +199,24 @@ Table prescription_items {
 }
 
 Table allergies {
-  id         bigint          [pk, increment]
-  patient_id bigint          [not null]
-  allergen   varchar(100)    [not null, note: 'gin trgm index for fuzzy search']
-  severity   allergy_severity [not null, note: 'enum: mild | moderate | severe']
-  created_at timestamptz     [not null, default: `now()`]
-  updated_at timestamptz     [not null, default: `now()`]
-  deleted_at timestamptz     [note: 'Soft delete — trigger blocks hard DELETE']
+  id                  bigint           [pk, increment]
+  patient_id          bigint           [not null]
+  allergen            varchar(100)     [not null]
+  allergen_normalized varchar(100)     [not null, note: 'auto-set by DB trigger: strip().lower() — never trust app layer']
+  allergy_type        allergy_type     [not null, note: 'enum: drug | food | environmental']
+  severity            allergy_severity [not null, note: 'enum: mild | moderate | severe | life_threatening']
+  reaction            text             [note: 'Free text — no length cap, Pydantic validates']
+  recorded_by_id      bigint           [note: 'Provider who recorded it — SET NULL on provider delete']
+  created_at          timestamptz      [not null, default: `now()`]
+  updated_at          timestamptz      [not null, default: `now()`]
+  deleted_at          timestamptz      [note: 'Soft delete']
 
   indexes {
-    (patient_id) [name: 'idx_allergies_patient', note: 'WHERE deleted_at IS NULL']
-    (allergen)   [name: 'idx_allergies_trgm',    note: 'USING gin (allergen gin_trgm_ops)']
+    (patient_id, allergen_normalized) [unique, name: 'uq_active_patient_allergen', note: 'WHERE deleted_at IS NULL — soft-delete-safe uniqueness']
+    (patient_id, allergen_normalized) [name: 'ix_allergy_drug_lookup',             note: 'WHERE deleted_at IS NULL AND allergy_type = drug — fast prescription conflict check']
   }
+
+  note: 'allergen_normalized set by SQLAlchemy event listener (before_insert/before_update). Prescription service queries only drug-type allergies during conflict check.'
 }
 
 Table documents {
@@ -361,7 +368,8 @@ Ref: prescriptions.appointment_id > appointments.id [delete: restrict]
 
 Ref: prescription_items.prescription_id > prescriptions.id [delete: cascade]
 
-Ref: allergies.patient_id > patients.id [delete: cascade]
+Ref: allergies.patient_id     > patients.id  [delete: cascade]
+Ref: allergies.recorded_by_id > providers.id [delete: "set null"]
 
 Ref: documents.patient_id     > patients.id     [delete: restrict]
 Ref: documents.appointment_id > appointments.id [delete: restrict]
