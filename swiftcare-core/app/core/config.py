@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    app_name: str = "Prahar Care Core"
+    app_name: str = "Swiftcare"
     environment: str = "development"
     debug: bool = True
 
