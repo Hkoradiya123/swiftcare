@@ -2,7 +2,7 @@ from decimal import Decimal
 from typing import Annotated, Optional
 from pydantic import BaseModel, Field, field_validator
 
-from app.models.enums import AllergySeverity, PrescriptionStatus
+from app.models.enums import AllergyType, AllergySeverity, PrescriptionStatus
 
 _MAX_ITEMS = 10
 
@@ -66,15 +66,19 @@ class PrescriptionRead(BaseModel):
 class AllergyCreate(BaseModel):
     patient_id: int
     allergen: str
+    allergy_type: AllergyType
     severity: AllergySeverity
     reaction: Optional[str] = None
+    recorded_by_id: Optional[int] = None
 
 
 class AllergyRead(BaseModel):
     id: int
     patient_id: int
     allergen: str
+    allergy_type: str
     severity: str
     reaction: Optional[str]
+    recorded_by_id: Optional[int]
 
     model_config = {"from_attributes": True}

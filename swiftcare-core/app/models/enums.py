@@ -31,3 +31,10 @@ class AllergySeverity(str, enum.Enum):
     MILD = "mild"
     MODERATE = "moderate"
     SEVERE = "severe"
+    LIFE_THREATENING = "life_threatening"
+
+
+class AllergyType(str, enum.Enum):
+    DRUG = "drug"
+    FOOD = "food"
+    ENVIRONMENTAL = "environmental"

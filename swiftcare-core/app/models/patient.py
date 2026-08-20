@@ -20,6 +20,13 @@ class Patient(Base, TimestampMixin, SoftDeleteMixin):
 
     # Relationships
     user: Mapped["User"] = relationship("User", lazy="raise")
+    allergies: Mapped[list["Allergy"]] = relationship(
+        "Allergy",
+        back_populates="patient",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="raise",
+    )
 
     def __repr__(self) -> str:
         return f"<Patient(id={self.id}, user_id={self.user_id}, phone='{self.phone}')>"

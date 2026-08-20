@@ -4,7 +4,7 @@ from sqlalchemy import ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, SoftDeleteMixin, TimestampMixin
-from app.models.enums import AllergySeverity, PrescriptionStatus
+from app.models.enums import PrescriptionStatus
 
 
 class Prescription(Base, TimestampMixin, SoftDeleteMixin):
@@ -35,11 +35,3 @@ class PrescriptionItem(Base, TimestampMixin):
     prescription: Mapped["Prescription"] = relationship("Prescription", back_populates="items", lazy="raise")
 
 
-class Allergy(Base, TimestampMixin, SoftDeleteMixin):
-    __tablename__ = "allergies"
-
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True, nullable=False)
-    allergen: Mapped[str] = mapped_column(String(100), nullable=False)
-    severity: Mapped[str] = mapped_column(String(20), nullable=False)
-    reaction: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)

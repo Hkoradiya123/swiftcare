@@ -3,7 +3,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.prescription import Allergy, Prescription, PrescriptionItem
+from app.models.allergy import Allergy
+from app.models.enums import AllergyType
+from app.models.prescription import Prescription, PrescriptionItem
 from app.repositories.base import BaseRepository
 
 
@@ -51,8 +53,14 @@ class AllergyRepository(BaseRepository[Allergy]):
         return list(result.scalars().all())
 
     async def allergen_names(self, patient_id: int) -> set[str]:
-        allergies = await self.get_for_patient(patient_id)
-        return {a.allergen.lower() for a in allergies}
+        result = await self.db.execute(
+            select(Allergy.allergen_normalized).where(
+                Allergy.patient_id == patient_id,
+                Allergy.deleted_at.is_(None),
+                Allergy.allergy_type == AllergyType.DRUG.value,
+            )
+        )
+        return {row[0] for row in result.all()}
 
     async def create(self, allergy: Allergy) -> Allergy:
         self.db.add(allergy)

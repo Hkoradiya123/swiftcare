@@ -1,9 +1,10 @@
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.allergy import Allergy
 from app.models.appointment import Appointment
 from app.models.enums import AppointmentStatus, PrescriptionStatus
-from app.models.prescription import Allergy, Prescription, PrescriptionItem
+from app.models.prescription import Prescription, PrescriptionItem
 from app.repositories.appointment import AppointmentRepository
 from app.repositories.prescription import AllergyRepository, PrescriptionRepository
 from app.schemas.prescription import AllergyCreate, PrescriptionCreate
@@ -26,7 +27,7 @@ class PrescriptionService:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only prescribe for your own appointments")
 
         known_allergens = await self.allergy_repo.allergen_names(data.patient_id)
-        conflicts = [item.drug_name for item in data.items if item.drug_name.lower() in known_allergens]
+        conflicts = [item.drug_name for item in data.items if item.drug_name.strip().lower() in known_allergens]
         if conflicts:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -85,8 +86,10 @@ class AllergyService:
         allergy = Allergy(
             patient_id=data.patient_id,
             allergen=data.allergen,
+            allergy_type=data.allergy_type.value,
             severity=data.severity.value,
             reaction=data.reaction,
+            recorded_by_id=data.recorded_by_id,
         )
         await self.repo.create(allergy)
         await self.db.commit()
