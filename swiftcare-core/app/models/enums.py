@@ -19,3 +19,15 @@ class AppointmentStatus(str, enum.Enum):
 class AppointmentType(str, enum.Enum):
     IN_PERSON = "in_person"
     TELEHEALTH = "telehealth"
+
+
+class PrescriptionStatus(str, enum.Enum):
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class AllergySeverity(str, enum.Enum):
+    MILD = "mild"
+    MODERATE = "moderate"
+    SEVERE = "severe"
