@@ -120,13 +120,40 @@ Table visit_embeddings {
   embedding vector(1536) [not null, note: 'pgvector embedding']
 }
 
-// Isolated Relay Database Table
-Table reminder_logs {
+// swiftcare-notify isolated tables (relay.schema in Supabase)
+Table notify.reminder_logs {
   id integer [primary key]
   appointment_id integer [not null]
-  reminder_type varchar(20) [not null, note: '24h, 2h']
+  patient_email varchar(255) [not null]
+  reminder_type varchar(10) [not null, note: '24h, 2h']
   sent_at timestamp [not null]
+  success boolean [not null, default: true]
+  error text
 }
+
+Table notify.task_logs {
+  id integer [primary key]
+  task_id varchar(255) [unique, not null]
+  task_name varchar(255) [not null]
+  status varchar(20) [not null, note: 'pending, success, failed']
+  payload text [note: 'JSON string']
+  error text
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+}
+
+// Auth token storage
+Table refresh_tokens {
+  id integer [primary key]
+  user_id integer [not null]
+  token_hash varchar(64) [unique, not null]
+  expires_at timestamp [not null]
+  revoked boolean [not null, default: false]
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+}
+
+Ref: refresh_tokens.user_id > users.id [delete: cascade]
 
 // Relationships & Foreign Keys
 
