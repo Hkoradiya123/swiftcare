@@ -6,12 +6,13 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Setup & Infrastructure
 
-- [ ] Initialise project structure and repo
+- [x] Initialise project structure and repo
 - [ ] Dockerise the app (Dockerfile + docker-compose)
-- [ ] Set up environment config (`.env`, secrets management)
+- [x] Set up environment config (`.env`, secrets management)
 - [ ] Configure S3 bucket and credentials
-- [ ] Split into two services: **core** (data) and **notify** (notifications/documents)
-- [ ] Define inter-service communication interface (REST or message queue)
+- [x] Split into two services: **core** (data) and **notify** (notifications/documents)
+- [x] Define inter-service communication interface (Redis Streams)
+- [x] Root `main.py` to start all services with one command
 
 ---
 
@@ -19,42 +20,61 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 > **DB:** Supabase (PostgreSQL)
 
-- [ ] Create Supabase project and grab connection string + anon/service keys
-- [ ] Configure ORM / migration tool (e.g. Prisma or SQLAlchemy) against Supabase Postgres
-- [ ] Schema: `patients`, `providers`, `users`
-- [ ] Schema: `appointments` (with type field for in-person / telehealth)
-- [ ] Schema: `prescriptions`
-- [ ] Schema: `documents` (S3 links)
-- [ ] Write initial migration
+- [x] Create Supabase project and grab connection string
+- [x] Configure Alembic + SQLAlchemy against Supabase Postgres
+- [x] Schema: `users`, `patients`, `providers`, `provider_availabilities`
+- [x] Schema: `refresh_tokens`
+- [x] Schema: `appointments` (with type field for in-person / telehealth)
+- [x] Schema: `notify.reminder_logs`, `notify.task_logs` (relay schema)
+- [x] Schema: `prescriptions`, `prescription_items`
+- [x] Schema: `allergies`
+- [ ] Schema: `visit_summaries`
+- [ ] Schema: `visit_embeddings` (pgvector)
+- [x] Initial migration applied to Supabase
 - [ ] Verify migration rollback works
 
 ---
 
 ## Auth & Roles
 
-- [ ] User registration and login (JWT or session)
-- [ ] Role model: `provider`, `patient`, `admin`
-- [ ] Role-based access middleware
-- [ ] Restrict prescription creation to providers only
+- [x] User registration and login (JWT)
+- [x] Refresh token — stored as SHA-256 hash, rotated on use
+- [x] `/auth/refresh` and `/auth/logout` endpoints
+- [x] Role model: `provider`, `patient`, `admin`
+- [x] Role-based access middleware (`require_role`)
+- [x] Restrict prescription creation to providers only
 
 ---
 
 ## Core CRUD
 
-- [ ] Patients — create, read, update, delete
-- [ ] Providers — create, read, update, delete
-- [ ] Appointments — create, read, update, delete
-- [ ] Prescriptions — create, read, update, delete
+- [x] Patients — create, read, update, delete
+- [x] Providers — create, read, update, delete
+- [x] Appointments — create, read, update, delete
+- [x] Prescriptions — create, read, cancel
+- [x] Allergies — create, list, soft delete
 
 ---
 
 ## Appointment Logic
 
-- [ ] In-person check-in / completion flow
-- [ ] Telehealth check-in / completion flow
-- [ ] Conflict detection (overlapping slots for same provider)
-- [ ] Filter appointments by date, provider, status
-- [ ] Paginate appointment list results
+- [x] In-person check-in / completion flow
+- [x] Telehealth check-in → in_progress flow
+- [x] Conflict detection — app-level overlap check
+- [x] Conflict detection — DB-level `gist` exclusion constraint
+- [x] Filter appointments by date, provider, status
+- [x] Paginate appointment list results
+- [x] Redis Stream event publish on appointment completion
+
+---
+
+## Prescription Logic
+
+- [x] Prescription linked to completed appointment only
+- [x] Provider can only prescribe for their own appointments
+- [x] Allergy conflict check (blocks if patient allergic to prescribed drug)
+- [x] Max 10 items per prescription
+- [x] Dosage / frequency / duration positive-value validation
 
 ---
 
@@ -68,19 +88,21 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Notifications & Documents (notify service)
 
-- [ ] Appointment reminder emails — scheduled job (cron)
-- [ ] Generate visit-summary document (PDF or similar)
+- [ ] Appointment reminder emails — scheduled job (Celery Beat)
+- [ ] Generate visit-summary document (WeasyPrint PDF)
 - [ ] Generate prescription document
 - [ ] Email visit summary to patient as attachment
 - [ ] Upload all generated documents to S3
 - [ ] Return S3 link instead of file in API response
+- [ ] Redis Stream consumer in swiftcare-notify
 
 ---
 
 ## Testing
 
-- [ ] Test: appointment conflict detection
-- [ ] Test: prescription validation rules
+- [x] Test: appointment conflict detection (14 tests passing)
+- [x] Test: state machine transitions (check-in, complete, cancel)
+- [x] Test: prescription validation rules (11 tests passing)
 - [ ] Test: role-based access (provider-only actions)
 - [ ] Test: reminder scheduler triggers correctly
 - [ ] Test: document upload returns S3 link
@@ -102,6 +124,6 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Polish
 
-- [ ] API documentation (OpenAPI / Swagger)
-- [ ] Seed script with sample/made-up patient data
+- [x] API documentation (OpenAPI / Swagger via FastAPI)
+- [x] Seed script with sample/made-up patient data
 - [ ] README with setup and run instructions

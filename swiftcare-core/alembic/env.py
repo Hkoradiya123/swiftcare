@@ -12,6 +12,7 @@ import app.models.patient        # noqa: F401
 import app.models.provider       # noqa: F401
 import app.models.refresh_token  # noqa: F401
 import app.models.appointment    # noqa: F401
+import app.models.prescription   # noqa: F401
 
 config = context.config
 
