@@ -1,4 +1,6 @@
 from datetime import timedelta
+import hashlib
+import secrets
 import bcrypt
 from jose import JWTError, jwt
 
@@ -30,6 +32,17 @@ def create_access_token(user_id: int, role: str) -> str:
         "exp": expire,
     }
     return jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)
+
+
+def create_refresh_token() -> tuple[str, str]:
+    """Return (raw_token, sha256_hash). Store only the hash; send the raw token to client."""
+    raw = secrets.token_urlsafe(32)
+    hashed = hashlib.sha256(raw.encode()).hexdigest()
+    return raw, hashed
+
+
+def hash_refresh_token(raw: str) -> str:
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 def decode_token(token: str) -> dict:
