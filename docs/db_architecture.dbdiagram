@@ -1,0 +1,310 @@
+{
+  "version": "3.0.0",
+  "darkMode": true,
+  "gridEnabling": true,
+  "currentViewName": null,
+  "defaultView": {
+    "detailLevel": "All",
+    "relationshipMode": "All",
+    "tablePositions": [
+      {
+        "name": "users",
+        "schemaName": "public",
+        "x": 55.33649509916478,
+        "y": -330.43794150079935
+      },
+      {
+        "name": "patients",
+        "schemaName": "public",
+        "x": 776,
+        "y": -64
+      },
+      {
+        "name": "providers",
+        "schemaName": "public",
+        "x": 800,
+        "y": 432
+      },
+      {
+        "name": "provider_availability",
+        "schemaName": "public",
+        "x": 1592,
+        "y": 320
+      },
+      {
+        "name": "appointments",
+        "schemaName": "public",
+        "x": 1616.1024142536862,
+        "y": 774.2569087578778
+      },
+      {
+        "name": "visit_summaries",
+        "schemaName": "public",
+        "x": -207.73814665466818,
+        "y": 485.28742373201015
+      },
+      {
+        "name": "prescriptions",
+        "schemaName": "public",
+        "x": 2304,
+        "y": 224
+      },
+      {
+        "name": "prescription_items",
+        "schemaName": "public",
+        "x": 2617.9892578125,
+        "y": 12
+      },
+      {
+        "name": "allergies",
+        "schemaName": "public",
+        "x": 1344,
+        "y": -288
+      },
+      {
+        "name": "visit_embeddings",
+        "schemaName": "public",
+        "x": 1530.8603515625,
+        "y": 1228
+      },
+      {
+        "name": "reminder_logs",
+        "schemaName": "public",
+        "x": 53.151340609538096,
+        "y": 38.454433248988806
+      }
+    ],
+    "tableGroupCollapseStates": [],
+    "stickyNoteLayouts": [],
+    "referencePaths": [
+      {
+        "firstFieldNames": [
+          "user_id"
+        ],
+        "firstTableName": "patients",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "id"
+        ],
+        "secondTableName": "users",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "user_id"
+        ],
+        "firstTableName": "providers",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "id"
+        ],
+        "secondTableName": "users",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "provider_id"
+        ],
+        "firstTableName": "provider_availability",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "id"
+        ],
+        "secondTableName": "providers",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "patient_id"
+        ],
+        "firstTableName": "appointments",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "id"
+        ],
+        "secondTableName": "patients",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": [
+          {
+            "x": 1271.4091480395202,
+            "y": 854.2569087578778
+          },
+          {
+            "x": 1271.4091480395202,
+            "y": -16
+          }
+        ]
+      },
+      {
+        "firstFieldNames": [
+          "provider_id"
+        ],
+        "firstTableName": "appointments",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "id"
+        ],
+        "secondTableName": "providers",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "appointment_id"
+        ],
+        "firstTableName": "visit_summaries",
+        "firstSchemaName": "public",
+        "firstRelation": "1",
+        "secondFieldNames": [
+          "id"
+        ],
+        "secondTableName": "appointments",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": [
+          {
+            "x": 67.22933381408183,
+            "y": 724.0140232259429
+          },
+          {
+            "x": 1556.420764380203,
+            "y": 724.0140232259429
+          }
+        ]
+      },
+      {
+        "firstFieldNames": [
+          "appointment_id"
+        ],
+        "firstTableName": "prescriptions",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "id"
+        ],
+        "secondTableName": "appointments",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "provider_id"
+        ],
+        "firstTableName": "prescriptions",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "id"
+        ],
+        "secondTableName": "providers",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": [
+          {
+            "x": 1463.3940199147426,
+            "y": 124
+          },
+          {
+            "x": 1463.3940199147426,
+            "y": 480
+          }
+        ]
+      },
+      {
+        "firstFieldNames": [
+          "patient_id"
+        ],
+        "firstTableName": "prescriptions",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "id"
+        ],
+        "secondTableName": "patients",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": [
+          {
+            "x": 2096.57177734375,
+            "y": -25.242062691186078
+          }
+        ]
+      },
+      {
+        "firstFieldNames": [
+          "prescription_id"
+        ],
+        "firstTableName": "prescription_items",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "id"
+        ],
+        "secondTableName": "prescriptions",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "patient_id"
+        ],
+        "firstTableName": "allergies",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "id"
+        ],
+        "secondTableName": "patients",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "patient_id"
+        ],
+        "firstTableName": "visit_embeddings",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "id"
+        ],
+        "secondTableName": "patients",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      },
+      {
+        "firstFieldNames": [
+          "visit_summary_id"
+        ],
+        "firstTableName": "visit_embeddings",
+        "firstSchemaName": "public",
+        "firstRelation": "*",
+        "secondFieldNames": [
+          "id"
+        ],
+        "secondTableName": "visit_summaries",
+        "secondSchemaName": "public",
+        "secondRelation": "1",
+        "checkPoints": []
+      }
+    ]
+  },
+  "views": {}
+}

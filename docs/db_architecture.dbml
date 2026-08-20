@@ -1,0 +1,151 @@
+// DBML (Database Markup Language) specification for Prahar Care
+
+Table users {
+  id integer [primary key]
+  email varchar(255) [unique, not null]
+  hashed_password varchar(255) [not null]
+  full_name varchar(150) [not null]
+  role varchar(20) [not null, note: 'patient, provider, admin']
+  is_active boolean [default: true, not null]
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+  deleted_at timestamp [note: 'Soft delete timestamp']
+}
+
+Table patients {
+  id integer [primary key]
+  user_id integer [unique, not null]
+  date_of_birth date [not null]
+  phone varchar(20) [not null]
+  blood_group varchar(5)
+  address varchar(500)
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+  deleted_at timestamp [note: 'Soft delete timestamp']
+}
+
+Table providers {
+  id integer [primary key]
+  user_id integer [unique, not null]
+  specialization varchar(100) [not null]
+  license_number varchar(50) [unique, not null]
+  consultation_fee decimal(10,2) [not null]
+  default_slot_minutes integer [default: 30, not null]
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+  deleted_at timestamp [note: 'Soft delete timestamp']
+}
+
+Table provider_availability {
+  id integer [primary key]
+  provider_id integer [not null]
+  weekday integer [not null, note: '0=Monday, 6=Sunday']
+  start_time time [not null]
+  end_time time [not null]
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+}
+
+Table appointments {
+  id integer [primary key]
+  patient_id integer [not null]
+  provider_id integer [not null]
+  appointment_type varchar(20) [not null, note: 'in_person, telehealth']
+  status varchar(20) [not null, note: 'scheduled, checked_in, in_progress, completed, cancelled, no_show']
+  scheduled_start timestamp [not null]
+  scheduled_end timestamp [not null]
+  checked_in_at timestamp
+  completed_at timestamp
+  reason varchar(500) [not null]
+  notes text
+  room_number varchar(20) [note: 'For in_person appointments']
+  meeting_link varchar(500) [note: 'For telehealth appointments']
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+  deleted_at timestamp [note: 'Soft delete timestamp']
+}
+
+Table visit_summaries {
+  id integer [primary key]
+  appointment_id integer [unique, not null]
+  diagnosis text [not null]
+  vitals jsonb [not null, note: 'JSON object containing vitals']
+  followup_date date
+  document_url varchar(500)
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+}
+
+Table prescriptions {
+  id integer [primary key]
+  appointment_id integer [not null]
+  provider_id integer [not null]
+  patient_id integer [not null]
+  status varchar(20) [not null, note: 'active, completed, cancelled']
+  notes text
+  document_url varchar(500)
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+  deleted_at timestamp [note: 'Soft delete timestamp']
+}
+
+Table prescription_items {
+  id integer [primary key]
+  prescription_id integer [not null]
+  drug_name varchar(200) [not null]
+  dosage_amount decimal(8,3) [not null]
+  dosage_unit varchar(20) [not null, note: 'mg, ml, etc.']
+  frequency_per_day integer [not null]
+  duration_days integer [not null]
+  instructions varchar(300)
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+}
+
+Table allergies {
+  id integer [primary key]
+  patient_id integer [not null]
+  allergen varchar(100) [not null]
+  severity varchar(20) [not null, note: 'mild, moderate, severe']
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+  deleted_at timestamp [note: 'Soft delete timestamp']
+}
+
+Table visit_embeddings {
+  id integer [primary key]
+  patient_id integer [not null]
+  visit_summary_id integer [not null]
+  content text [not null]
+  embedding vector(1536) [not null, note: 'pgvector embedding']
+}
+
+// Isolated Relay Database Table
+Table reminder_logs {
+  id integer [primary key]
+  appointment_id integer [not null]
+  reminder_type varchar(20) [not null, note: '24h, 2h']
+  sent_at timestamp [not null]
+}
+
+// Relationships & Foreign Keys
+
+Ref: patients.user_id > users.id [delete: restrict]
+Ref: providers.user_id > users.id [delete: restrict]
+Ref: provider_availability.provider_id > providers.id [delete: cascade]
+
+Ref: appointments.patient_id > patients.id [delete: restrict]
+Ref: appointments.provider_id > providers.id [delete: restrict]
+
+Ref: visit_summaries.appointment_id - appointments.id [delete: restrict]
+
+Ref: prescriptions.appointment_id > appointments.id [delete: restrict]
+Ref: prescriptions.provider_id > providers.id [delete: restrict]
+Ref: prescriptions.patient_id > patients.id [delete: restrict]
+
+Ref: prescription_items.prescription_id > prescriptions.id [delete: cascade]
+
+Ref: allergies.patient_id > patients.id [delete: cascade]
+
+Ref: visit_embeddings.patient_id > patients.id [delete: cascade]
+Ref: visit_embeddings.visit_summary_id > visit_summaries.id [delete: cascade]
