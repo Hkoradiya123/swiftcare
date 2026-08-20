@@ -66,3 +66,7 @@ wheels/
 # Byte-compiled / optimized / DLL files
 *.manifest
 *.spec
+docs/db_architecture.dbml
+TODO.md
+TODO.md
+
