@@ -1,3 +1,11 @@
+import sys
+from pathlib import Path
+
+# Add swiftcare-contracts to sys.path
+contracts_dir = str(Path(__file__).resolve().parents[2] / "swiftcare-contracts")
+if contracts_dir not in sys.path:
+    sys.path.insert(0, contracts_dir)
+
 import pytest
 import pytest_asyncio
 from collections import defaultdict
@@ -5,6 +13,7 @@ from httpx import ASGITransport, AsyncClient
 from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
+
 
 import app.models  # Register all ORM models on Base.metadata
 from app.db.base import Base

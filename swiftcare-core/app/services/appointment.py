@@ -4,7 +4,15 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
-from swiftcare_contracts.events import AppointmentCompletedEvent, AppointmentScheduledEvent
+try:
+    from swiftcare_contracts.events import AppointmentCompletedEvent, AppointmentScheduledEvent
+except ModuleNotFoundError:
+    import sys
+    from pathlib import Path
+    contracts_dir = str(Path(__file__).resolve().parents[3])
+    if contracts_dir not in sys.path:
+        sys.path.append(contracts_dir)
+    from swiftcare_contracts.events import AppointmentCompletedEvent, AppointmentScheduledEvent
 
 from app.models.appointment import Appointment, DomainError, InPersonAppointment, TelehealthAppointment
 from app.models.enums import AppointmentType
