@@ -1,5 +1,6 @@
 import pytest
 from httpx import AsyncClient
+from tests.conftest import _register_login
 
 
 @pytest.mark.asyncio
@@ -84,3 +85,35 @@ async def test_login_invalid_password_returns_401(client: AsyncClient):
     login_res = await client.post("/api/v1/auth/login", json=login_payload)
     assert login_res.status_code == 401
     assert login_res.json()["detail"] == "Invalid email or password"
+
+
+@pytest.mark.asyncio
+async def test_unauthenticated_request_returns_401(client: AsyncClient):
+    res = await client.get("/api/v1/auth/me")
+    assert res.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_short_password_returns_422(client: AsyncClient):
+    res = await client.post("/api/v1/auth/register", json={
+        "email": "short@swiftcare.io", "password": "abc", "full_name": "Test", "role": "patient",
+    })
+    assert res.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_blank_name_returns_422(client: AsyncClient):
+    res = await client.post("/api/v1/auth/register", json={
+        "email": "blank@swiftcare.io", "password": "Password123!", "full_name": "   ", "role": "patient",
+    })
+    assert res.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_patient_on_provider_route_returns_403(client: AsyncClient):
+    headers = await _register_login(client, "pat.role@swiftcare.io", "patient", "Pat Role")
+    res = await client.post("/api/v1/providers", json={
+        "specialization": "Surgery", "license_number": "LIC-X",
+        "consultation_fee": "200.00", "default_slot_minutes": 30,
+    }, headers=headers)
+    assert res.status_code == 403
