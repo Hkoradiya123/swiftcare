@@ -1,3 +1,4 @@
+from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Optional
 from pydantic import BaseModel, Field, field_validator
@@ -8,12 +9,12 @@ _MAX_ITEMS = 10
 
 
 class PrescriptionItemCreate(BaseModel):
-    drug_name: str
+    drug_name: str = Field(min_length=1, max_length=200)
     dosage_amount: Decimal
-    dosage_unit: str
+    dosage_unit: str = Field(min_length=1, max_length=50)
     frequency_per_day: int
     duration_days: int
-    instructions: Optional[str] = None
+    instructions: Optional[str] = Field(default=None, max_length=1000)
 
     @field_validator("dosage_amount")
     @classmethod
@@ -34,7 +35,7 @@ class PrescriptionCreate(BaseModel):
     appointment_id: int
     patient_id: int
     items: Annotated[list[PrescriptionItemCreate], Field(min_length=1, max_length=_MAX_ITEMS)]
-    notes: Optional[str] = None
+    notes: Optional[str] = Field(default=None, max_length=2000)
 
 
 class PrescriptionItemRead(BaseModel):
@@ -58,17 +59,17 @@ class PrescriptionRead(BaseModel):
     status: str
     notes: Optional[str]
     items: list[PrescriptionItemRead]
-    created_at: str
+    created_at: datetime
 
     model_config = {"from_attributes": True}
 
 
 class AllergyCreate(BaseModel):
     patient_id: int
-    allergen: str
+    allergen: str = Field(min_length=1, max_length=100)
     allergy_type: AllergyType
     severity: AllergySeverity
-    reaction: Optional[str] = None
+    reaction: Optional[str] = Field(default=None, max_length=500)
     recorded_by_id: Optional[int] = None
 
 

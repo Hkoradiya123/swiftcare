@@ -12,17 +12,13 @@ venv/
 .venv/
 env/
 ENV/
-env.bak/
-venv.bak/
 
 # Testing & Coverage
 .pytest_cache/
 .coverage
 htmlcov/
-.nox/
 .tox/
 *.cover
-*.pyo
 
 # IDEs & Editors
 .vscode/
@@ -31,12 +27,12 @@ htmlcov/
 *.swo
 *~
 .DS_Store
+Thumbs.db
 
-# Database & SQLite local test databases
+# Database & SQLite
 *.db
 *.sqlite3
 *.sqlite
-prahar_care.db
 
 # Celery & Redis state
 celerybeat-schedule
@@ -48,25 +44,29 @@ logs/
 
 # Build & Packaging
 build/
-develop-eggs/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
 *.egg
+wheels/
 
-# Byte-compiled / optimized / DLL files
-*.manifest
-*.spec
-docs/db_architecture.dbml
-TODO.md
-TODO.md
+# Alembic
+alembic/versions/__pycache__/
 
+# Generated documents & uploads
+*.pdf
+generated/
+uploads/
+
+# AWS / S3 credentials
+.aws/
+
+# Coverage & type checking
+.mypy_cache/
+.ruff_cache/
+coverage.xml
+
+# Claude Code
+CLAUDE.md
+AGENT_LOG.md
+
+/Intern-Project2-Patient-Care-Assistant-Requirements.pdf

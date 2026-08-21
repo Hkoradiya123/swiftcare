@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_role
+from app.core.rate_limit import rate_limit
 from app.db.session import get_db
 from app.models.enums import UserRole
 from app.models.user import User
@@ -11,7 +12,8 @@ from app.services.prescription import AllergyService, PrescriptionService
 router = APIRouter(tags=["prescriptions"])
 
 
-@router.post("/prescriptions", response_model=PrescriptionRead, status_code=status.HTTP_201_CREATED)
+@router.post("/prescriptions", response_model=PrescriptionRead, status_code=status.HTTP_201_CREATED,
+             dependencies=[Depends(rate_limit(max_calls=10, window_seconds=60))])
 async def create_prescription(
     data: PrescriptionCreate,
     current_user: User = Depends(require_role(UserRole.PROVIDER)),

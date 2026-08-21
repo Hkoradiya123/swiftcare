@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  body { font-family: Helvetica, Arial, sans-serif; margin: 48px; color: #1a1a1a; }
+  .header { border-bottom: 2px solid #2563eb; padding-bottom: 14px; margin-bottom: 24px; }
+  .header h2 { margin: 0 0 4px; font-size: 22px; color: #2563eb; }
+  .header .date { color: #6b7280; font-size: 13px; }
+  .field { margin: 10px 0; font-size: 14px; line-height: 1.5; }
+  .label { font-weight: bold; color: #374151; min-width: 110px; display: inline-block; }
+  .section { margin-top: 28px; }
+  .section h3 { font-size: 15px; color: #374151; border-bottom: 1px solid #e5e7eb; padding-bottom: 6px; }
+  .footer { margin-top: 48px; font-size: 11px; color: #9ca3af; border-top: 1px solid #e5e7eb; padding-top: 10px; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <h2>SwiftCare — Visit Summary</h2>
+    <div class="date">{{ appointment_date }}</div>
+  </div>
+
+  <div class="section">
+    <h3>Patient &amp; Provider</h3>
+    <div class="field"><span class="label">Patient:</span> {{ patient_name }}</div>
+    <div class="field"><span class="label">Provider:</span> {{ provider_name }}</div>
+  </div>
+
+  <div class="section">
+    <h3>Visit Details</h3>
+    <div class="field"><span class="label">Reason:</span> {{ reason }}</div>
+    <div class="field"><span class="label">Notes:</span> {{ notes if notes else "—" }}</div>
+  </div>
+
+  <div class="footer">
+    This document was generated automatically by SwiftCare. For questions contact your provider.
+  </div>
+</body>
+</html>
