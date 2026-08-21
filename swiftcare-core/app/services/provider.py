@@ -165,6 +165,69 @@ class ProviderService:
             end_time=str(avail.end_time),
         )
 
+    async def add_availabilities_bulk(
+        self, provider_id: int, data_list: list[ProviderAvailabilityCreate], current_user: User
+    ) -> list[ProviderAvailabilityRead]:
+        provider = await self.repo.get_by_id_with_user(provider_id)
+        if not provider:
+            raise HTTPException(status_code=404, detail="Provider not found")
+
+        if provider.user_id != current_user.id and current_user.role != "admin":
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        created_avails: list[ProviderAvailability] = []
+
+        parsed_items = []
+        for idx, item in enumerate(data_list):
+            start = time.fromisoformat(item.start_time)
+            end = time.fromisoformat(item.end_time)
+            if end <= start:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Item {idx}: end_time must be after start_time",
+                )
+            parsed_items.append((item, start, end))
+
+        for i in range(len(parsed_items)):
+            item1, s1, e1 = parsed_items[i]
+            for j in range(i + 1, len(parsed_items)):
+                item2, s2, e2 = parsed_items[j]
+                if item1.weekday == item2.weekday and max(s1, s2) < min(e1, e2):
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"Batch payload contains overlapping slots on weekday {item1.weekday} ({item1.start_time}-{item1.end_time} and {item2.start_time}-{item2.end_time})",
+                    )
+
+        for item, start, end in parsed_items:
+            existing_shifts = await self.repo.get_availabilities_by_weekday(provider_id, item.weekday)
+            for slot in existing_shifts:
+                if max(start, slot.start_time) < min(end, slot.end_time):
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"Availability slot ({item.start_time} - {item.end_time}) overlaps with existing slot ({slot.start_time} - {slot.end_time})",
+                    )
+            avail = ProviderAvailability(
+                provider_id=provider_id,
+                weekday=item.weekday,
+                start_time=start,
+                end_time=end,
+            )
+            avail = await self.repo.add_availability(avail)
+            created_avails.append(avail)
+
+        await self.db.commit()
+
+        return [
+            ProviderAvailabilityRead(
+                id=a.id,
+                weekday=a.weekday,
+                start_time=str(a.start_time),
+                end_time=str(a.end_time),
+            )
+            for a in created_avails
+        ]
+
+
     async def list_availabilities(
         self, provider_id: int
     ) -> list[ProviderAvailabilityRead]:

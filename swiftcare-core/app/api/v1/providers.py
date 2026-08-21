@@ -70,6 +70,21 @@ async def add_my_availability(
     return await ProviderService(db).add_availability(provider.id, data, current_user)
 
 
+@router.post(
+    "/me/availability/bulk",
+    response_model=list[ProviderAvailabilityRead],
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_my_availabilities_bulk(
+    data_list: list[ProviderAvailabilityCreate],
+    current_user: User = Depends(require_role(UserRole.PROVIDER)),
+    db: AsyncSession = Depends(get_db),
+) -> list[ProviderAvailabilityRead]:
+    provider = await ProviderService(db).get_me(current_user)
+    return await ProviderService(db).add_availabilities_bulk(provider.id, data_list, current_user)
+
+
+
 @router.patch("/me/availability/{slot_id}", response_model=ProviderAvailabilityRead)
 async def update_my_availability(
     slot_id: int,
@@ -121,6 +136,21 @@ async def add_availability(
     db: AsyncSession = Depends(get_db),
 ) -> ProviderAvailabilityRead:
     return await ProviderService(db).add_availability(provider_id, data, current_user)
+
+
+@router.post(
+    "/{provider_id}/availability/bulk",
+    response_model=list[ProviderAvailabilityRead],
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_availabilities_bulk(
+    provider_id: int,
+    data_list: list[ProviderAvailabilityCreate],
+    current_user: User = Depends(require_role(UserRole.PROVIDER, UserRole.ADMIN)),
+    db: AsyncSession = Depends(get_db),
+) -> list[ProviderAvailabilityRead]:
+    return await ProviderService(db).add_availabilities_bulk(provider_id, data_list, current_user)
+
 
 
 @router.patch("/{provider_id}/availability/{slot_id}", response_model=ProviderAvailabilityRead)
