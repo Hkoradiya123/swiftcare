@@ -1,0 +1,123 @@
+services:
+  core-db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: swiftcare_core
+      POSTGRES_USER: core
+      POSTGRES_PASSWORD: core
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U core"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - core-db-data:/var/lib/postgresql/data
+
+  notify-db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: swiftcare_notify
+      POSTGRES_USER: notify
+      POSTGRES_PASSWORD: notify
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notify"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - notify-db-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  swiftcare-core:
+    build: ./swiftcare-core
+    ports:
+      - "8000:8000"
+    depends_on:
+      core-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://core:core@core-db:5432/swiftcare_core
+      REDIS_URL: redis://redis:6379/0
+    restart: unless-stopped
+
+  swiftcare-notify:
+    build: ./swiftcare-notify
+    depends_on:
+      notify-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://notify:notify@notify-db:5432/swiftcare_notify
+      REDIS_URL: redis://redis:6379/0
+      CONSUMER_NAME: notify-1
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: swiftcare
+      S3_SECRET_KEY: swiftcare123
+      S3_BUCKET: swiftcare-docs
+    restart: unless-stopped
+
+  celery-worker:
+    build: ./swiftcare-notify
+    command: celery -A app.celery_app.celery worker -Q celery --loglevel=info
+    depends_on:
+      notify-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://notify:notify@notify-db:5432/swiftcare_notify
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: swiftcare
+      S3_SECRET_KEY: swiftcare123
+      S3_BUCKET: swiftcare-docs
+    restart: unless-stopped
+
+  celery-beat:
+    build: ./swiftcare-notify
+    command: celery -A app.celery_app.celery beat --loglevel=info
+    depends_on:
+      notify-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://notify:notify@notify-db:5432/swiftcare_notify
+      REDIS_URL: redis://redis:6379/0
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: swiftcare
+      MINIO_ROOT_PASSWORD: swiftcare123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - minio-data:/data
+
+volumes:
+  core-db-data:
+  notify-db-data:
+  minio-data:
