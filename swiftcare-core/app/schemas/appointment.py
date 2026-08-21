@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from app.models.enums import AppointmentStatus, AppointmentType
 
@@ -11,10 +11,10 @@ class AppointmentCreate(BaseModel):
     appointment_type: AppointmentType
     scheduled_start: datetime
     scheduled_end: datetime
-    reason: str
-    notes: Optional[str] = None
-    room_number: Optional[str] = None
-    meeting_link: Optional[str] = None
+    reason: str = Field(min_length=1, max_length=500)
+    notes: Optional[str] = Field(default=None, max_length=2000)
+    room_number: Optional[str] = Field(default=None, max_length=20)
+    meeting_link: Optional[str] = Field(default=None, max_length=500)
 
     @model_validator(mode="after")
     def end_after_start(self):
@@ -46,5 +46,5 @@ class AppointmentFilter(BaseModel):
     provider_id: Optional[int] = None
     status: Optional[AppointmentStatus] = None
     date: Optional[str] = None  # YYYY-MM-DD
-    page: int = 1
-    page_size: int = 20
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=20, ge=1, le=100)

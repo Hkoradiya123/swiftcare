@@ -1,12 +1,20 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from app.models.enums import UserRole
 
 
 class RegisterRequest(BaseModel):
     email: EmailStr
-    password: str
-    full_name: str
+    password: str = Field(min_length=8, max_length=128)
+    full_name: str = Field(min_length=1, max_length=100)
     role: UserRole = UserRole.PATIENT
+
+    @field_validator("full_name")
+    @classmethod
+    def full_name_printable(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("full_name cannot be blank")
+        return v
 
 
 class LoginRequest(BaseModel):
