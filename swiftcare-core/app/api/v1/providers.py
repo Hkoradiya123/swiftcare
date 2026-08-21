@@ -10,21 +10,13 @@ from app.schemas.common import PaginatedResponse
 from app.schemas.provider import (
     ProviderAvailabilityCreate,
     ProviderAvailabilityRead,
+    ProviderAvailabilityUpdate,
     ProviderCreate,
     ProviderRead,
 )
 from app.services.provider import ProviderService
 
 router = APIRouter(prefix="/providers", tags=["providers"])
-
-
-@router.post("", response_model=ProviderRead, status_code=status.HTTP_201_CREATED)
-async def create_provider(
-    data: ProviderCreate,
-    current_user: User = Depends(require_role(UserRole.PROVIDER)),
-    db: AsyncSession = Depends(get_db),
-) -> ProviderRead:
-    return await ProviderService(db).create(data, current_user)
 
 
 @router.get("", response_model=PaginatedResponse[ProviderRead])
@@ -37,6 +29,67 @@ async def list_providers(
 ) -> PaginatedResponse[ProviderRead]:
     return await ProviderService(db).list_all(page, size, specialization)
 
+@router.post("", response_model=ProviderRead, status_code=status.HTTP_201_CREATED)
+@router.post("/me", response_model=ProviderRead, status_code=status.HTTP_201_CREATED)
+async def create_provider(
+    data: ProviderCreate,
+    current_user: User = Depends(require_role(UserRole.PROVIDER, UserRole.ADMIN)),
+    db: AsyncSession = Depends(get_db),
+) -> ProviderRead:
+    return await ProviderService(db).create(data, current_user)
+
+
+@router.get("/me", response_model=ProviderRead)
+async def get_my_provider_profile(
+    current_user: User = Depends(require_role(UserRole.PROVIDER)),
+    db: AsyncSession = Depends(get_db),
+) -> ProviderRead:
+    return await ProviderService(db).get_me(current_user)
+
+
+@router.get("/me/availability", response_model=list[ProviderAvailabilityRead])
+async def list_my_availabilities(
+    current_user: User = Depends(require_role(UserRole.PROVIDER)),
+    db: AsyncSession = Depends(get_db),
+) -> list[ProviderAvailabilityRead]:
+    provider = await ProviderService(db).get_me(current_user)
+    return await ProviderService(db).list_availabilities(provider.id)
+
+
+@router.post(
+    "/me/availability",
+    response_model=ProviderAvailabilityRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_my_availability(
+    data: ProviderAvailabilityCreate,
+    current_user: User = Depends(require_role(UserRole.PROVIDER)),
+    db: AsyncSession = Depends(get_db),
+) -> ProviderAvailabilityRead:
+    provider = await ProviderService(db).get_me(current_user)
+    return await ProviderService(db).add_availability(provider.id, data, current_user)
+
+
+@router.patch("/me/availability/{slot_id}", response_model=ProviderAvailabilityRead)
+async def update_my_availability(
+    slot_id: int,
+    data: ProviderAvailabilityUpdate,
+    current_user: User = Depends(require_role(UserRole.PROVIDER)),
+    db: AsyncSession = Depends(get_db),
+) -> ProviderAvailabilityRead:
+    provider = await ProviderService(db).get_me(current_user)
+    return await ProviderService(db).update_availability(provider.id, slot_id, data, current_user)
+
+
+@router.delete("/me/availability/{slot_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_my_availability(
+    slot_id: int,
+    current_user: User = Depends(require_role(UserRole.PROVIDER)),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    provider = await ProviderService(db).get_me(current_user)
+    await ProviderService(db).delete_availability(provider.id, slot_id, current_user)
+
 
 @router.get("/{provider_id}", response_model=ProviderRead)
 async def get_provider(
@@ -47,6 +100,15 @@ async def get_provider(
     return await ProviderService(db).get(provider_id)
 
 
+@router.get("/{provider_id}/availability", response_model=list[ProviderAvailabilityRead])
+async def list_provider_availabilities(
+    provider_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[ProviderAvailabilityRead]:
+    return await ProviderService(db).list_availabilities(provider_id)
+
+
 @router.post(
     "/{provider_id}/availability",
     response_model=ProviderAvailabilityRead,
@@ -55,7 +117,30 @@ async def get_provider(
 async def add_availability(
     provider_id: int,
     data: ProviderAvailabilityCreate,
-    current_user: User = Depends(require_role(UserRole.PROVIDER)),
+    current_user: User = Depends(require_role(UserRole.PROVIDER, UserRole.ADMIN)),
     db: AsyncSession = Depends(get_db),
 ) -> ProviderAvailabilityRead:
     return await ProviderService(db).add_availability(provider_id, data, current_user)
+
+
+@router.patch("/{provider_id}/availability/{slot_id}", response_model=ProviderAvailabilityRead)
+async def update_availability(
+    provider_id: int,
+    slot_id: int,
+    data: ProviderAvailabilityUpdate,
+    current_user: User = Depends(require_role(UserRole.PROVIDER, UserRole.ADMIN)),
+    db: AsyncSession = Depends(get_db),
+) -> ProviderAvailabilityRead:
+    return await ProviderService(db).update_availability(provider_id, slot_id, data, current_user)
+
+
+@router.delete("/{provider_id}/availability/{slot_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_availability(
+    provider_id: int,
+    slot_id: int,
+    current_user: User = Depends(require_role(UserRole.PROVIDER, UserRole.ADMIN)),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    await ProviderService(db).delete_availability(provider_id, slot_id, current_user)
+
+
