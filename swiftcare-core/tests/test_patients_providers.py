@@ -106,14 +106,15 @@ async def test_provider_crud_and_availability_flow(client: AsyncClient):
     del_res = await client.delete(f"/api/v1/providers/{provider_id}/availability/{slot_id}", headers=headers)
     assert del_res.status_code == 204
 
-    # 9. Bulk Create Availability Slots
+    # 9. Bulk Create Availability Slots via Array Payload on POST /availability
     bulk_payload = [
         {"weekday": 1, "start_time": "09:00", "end_time": "13:00"},
         {"weekday": 1, "start_time": "15:00", "end_time": "19:00"}
     ]
-    bulk_res = await client.post(f"/api/v1/providers/{provider_id}/availability/bulk", json=bulk_payload, headers=headers)
+    bulk_res = await client.post(f"/api/v1/providers/{provider_id}/availability", json=bulk_payload, headers=headers)
     assert bulk_res.status_code == 201
     assert len(bulk_res.json()) == 2
+
 
 
 

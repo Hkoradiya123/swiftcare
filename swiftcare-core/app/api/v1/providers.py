@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Union
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -58,31 +58,18 @@ async def list_my_availabilities(
 
 @router.post(
     "/me/availability",
-    response_model=ProviderAvailabilityRead,
+    response_model=Union[ProviderAvailabilityRead, list[ProviderAvailabilityRead]],
     status_code=status.HTTP_201_CREATED,
 )
 async def add_my_availability(
-    data: ProviderAvailabilityCreate,
+    data: Union[ProviderAvailabilityCreate, list[ProviderAvailabilityCreate]],
     current_user: User = Depends(require_role(UserRole.PROVIDER)),
     db: AsyncSession = Depends(get_db),
-) -> ProviderAvailabilityRead:
+) -> Union[ProviderAvailabilityRead, list[ProviderAvailabilityRead]]:
     provider = await ProviderService(db).get_me(current_user)
+    if isinstance(data, list):
+        return await ProviderService(db).add_availabilities_bulk(provider.id, data, current_user)
     return await ProviderService(db).add_availability(provider.id, data, current_user)
-
-
-@router.post(
-    "/me/availability/bulk",
-    response_model=list[ProviderAvailabilityRead],
-    status_code=status.HTTP_201_CREATED,
-)
-async def add_my_availabilities_bulk(
-    data_list: list[ProviderAvailabilityCreate],
-    current_user: User = Depends(require_role(UserRole.PROVIDER)),
-    db: AsyncSession = Depends(get_db),
-) -> list[ProviderAvailabilityRead]:
-    provider = await ProviderService(db).get_me(current_user)
-    return await ProviderService(db).add_availabilities_bulk(provider.id, data_list, current_user)
-
 
 
 @router.patch("/me/availability/{slot_id}", response_model=ProviderAvailabilityRead)
@@ -126,30 +113,19 @@ async def list_provider_availabilities(
 
 @router.post(
     "/{provider_id}/availability",
-    response_model=ProviderAvailabilityRead,
+    response_model=Union[ProviderAvailabilityRead, list[ProviderAvailabilityRead]],
     status_code=status.HTTP_201_CREATED,
 )
 async def add_availability(
     provider_id: int,
-    data: ProviderAvailabilityCreate,
+    data: Union[ProviderAvailabilityCreate, list[ProviderAvailabilityCreate]],
     current_user: User = Depends(require_role(UserRole.PROVIDER, UserRole.ADMIN)),
     db: AsyncSession = Depends(get_db),
-) -> ProviderAvailabilityRead:
+) -> Union[ProviderAvailabilityRead, list[ProviderAvailabilityRead]]:
+    if isinstance(data, list):
+        return await ProviderService(db).add_availabilities_bulk(provider_id, data, current_user)
     return await ProviderService(db).add_availability(provider_id, data, current_user)
 
-
-@router.post(
-    "/{provider_id}/availability/bulk",
-    response_model=list[ProviderAvailabilityRead],
-    status_code=status.HTTP_201_CREATED,
-)
-async def add_availabilities_bulk(
-    provider_id: int,
-    data_list: list[ProviderAvailabilityCreate],
-    current_user: User = Depends(require_role(UserRole.PROVIDER, UserRole.ADMIN)),
-    db: AsyncSession = Depends(get_db),
-) -> list[ProviderAvailabilityRead]:
-    return await ProviderService(db).add_availabilities_bulk(provider_id, data_list, current_user)
 
 
 
