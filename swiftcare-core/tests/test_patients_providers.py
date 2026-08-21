@@ -80,3 +80,42 @@ async def test_provider_crud_and_availability_flow(client: AsyncClient):
     items = list_res.json()["items"]
     assert len(items) == 1
     assert items[0]["license_number"] == "CARD-99182"
+
+    # 5. Overlapping availability slot returns 409 Conflict
+    overlap_payload = {
+        "weekday": 0,  # Monday
+        "start_time": "11:00",
+        "end_time": "15:00"
+    }
+    overlap_res = await client.post(f"/api/v1/providers/{provider_id}/availability", json=overlap_payload, headers=headers)
+    assert overlap_res.status_code == 409
+
+    # 6. List Availabilities (GET)
+    avail_list_res = await client.get(f"/api/v1/providers/{provider_id}/availability", headers=headers)
+    assert avail_list_res.status_code == 200
+    slots = avail_list_res.json()
+    assert len(slots) == 1
+    slot_id = slots[0]["id"]
+
+    # 7. Update Availability Slot (PATCH)
+    patch_res = await client.patch(f"/api/v1/providers/{provider_id}/availability/{slot_id}", json={"start_time": "10:00"}, headers=headers)
+    assert patch_res.status_code == 200
+    assert patch_res.json()["start_time"] == "10:00:00"
+
+    # 8. Delete Availability Slot (DELETE)
+    del_res = await client.delete(f"/api/v1/providers/{provider_id}/availability/{slot_id}", headers=headers)
+    assert del_res.status_code == 204
+
+
+
+
+@pytest.mark.asyncio
+async def test_patient_scoping_by_role(client: AsyncClient):
+    # 1. Admin header
+    admin_headers = await get_authenticated_headers(client, "admin1@swiftcare.io", "admin")
+
+    # 2. Admin listing returns all patients
+    res = await client.get("/api/v1/patients", headers=admin_headers)
+    assert res.status_code == 200
+    assert "items" in res.json()
+
