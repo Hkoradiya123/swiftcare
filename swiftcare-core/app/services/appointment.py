@@ -1,9 +1,15 @@
+from uuid import uuid4
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
+from swiftcare_contracts.events import AppointmentCompletedEvent, AppointmentScheduledEvent
 
 from app.models.appointment import Appointment, DomainError, InPersonAppointment, TelehealthAppointment
 from app.models.enums import AppointmentType
+from app.models.patient import Patient
+from app.models.provider import Provider
 from app.repositories.appointment import AppointmentRepository
 from app.schemas.appointment import AppointmentCreate, AppointmentFilter
 from app.events.publisher import publish
@@ -37,6 +43,24 @@ class AppointmentService:
             if "ex_appt_no_provider_overlap" in str(e):
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Provider was booked by another user. Please choose another slot.")
             raise
+
+        patient_row = (await self.db.execute(
+            select(Patient).options(joinedload(Patient.user)).where(Patient.id == appt.patient_id)
+        )).scalar_one()
+        provider_row = (await self.db.execute(
+            select(Provider).options(joinedload(Provider.user)).where(Provider.id == appt.provider_id)
+        )).scalar_one()
+        await publish(AppointmentScheduledEvent(
+            event_id=uuid4(),
+            appointment_id=appt.id,
+            patient_id=appt.patient_id,
+            provider_id=appt.provider_id,
+            scheduled_start=appt.scheduled_start,
+            reason=appt.reason,
+            patient_name=patient_row.user.full_name,
+            patient_email=patient_row.user.email,
+            provider_name=provider_row.user.full_name,
+        ))
         return appt
 
     async def get(self, appt_id: int) -> Appointment:
@@ -71,7 +95,26 @@ class AppointmentService:
         except DomainError as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
         await self.db.commit()
-        await publish("appointment.completed", {"appointment_id": appt.id, "patient_id": appt.patient_id})
+
+        patient_row = (await self.db.execute(
+            select(Patient).options(joinedload(Patient.user)).where(Patient.id == appt.patient_id)
+        )).scalar_one()
+        provider_row = (await self.db.execute(
+            select(Provider).options(joinedload(Provider.user)).where(Provider.id == appt.provider_id)
+        )).scalar_one()
+
+        await publish(AppointmentCompletedEvent(
+            event_id=uuid4(),
+            appointment_id=appt.id,
+            patient_id=appt.patient_id,
+            provider_id=appt.provider_id,
+            completed_at=appt.completed_at,
+            patient_name=patient_row.user.full_name,
+            patient_email=patient_row.user.email,
+            provider_name=provider_row.user.full_name,
+            reason=appt.reason,
+            notes=appt.notes,
+        ))
         return appt
 
     async def cancel(self, appt_id: int) -> Appointment:
