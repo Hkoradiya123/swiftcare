@@ -55,6 +55,14 @@ class ProviderAvailabilityCreate(BaseModel):
             raise ValueError("Weekday must be between 0 and 6")
         return v
 
+    @field_validator("start_time", "end_time")
+    @classmethod
+    def time_format(cls, v: str) -> str:
+        import re
+        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", v):
+            raise ValueError("Time must be in HH:MM format (00:00–23:59)")
+        return v
+
 
 class ProviderAvailabilityRead(BaseModel):
     id: int
