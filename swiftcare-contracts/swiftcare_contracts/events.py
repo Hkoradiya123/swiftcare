@@ -1,0 +1,45 @@
+from datetime import datetime
+from typing import Optional
+from uuid import UUID
+from pydantic import BaseModel
+
+
+class AppointmentCompletedEvent(BaseModel):
+    event_id: UUID
+    event_type: str = "appointment.completed"
+    schema_version: int = 1
+    appointment_id: int
+    patient_id: int
+    provider_id: int
+    completed_at: datetime
+    # denormalized so relay never needs to query core DB
+    patient_name: str
+    patient_email: str
+    provider_name: str
+    reason: str
+    notes: Optional[str] = None
+
+
+class AppointmentScheduledEvent(BaseModel):
+    event_id: UUID
+    event_type: str = "appointment.scheduled"
+    schema_version: int = 1
+    appointment_id: int
+    patient_id: int
+    provider_id: int
+    scheduled_start: datetime
+    reason: str
+    # denormalized for relay service independence
+    patient_name: str
+    patient_email: str
+    provider_name: str
+
+
+class PrescriptionCreatedEvent(BaseModel):
+    event_id: UUID
+    event_type: str = "prescription.created"
+    schema_version: int = 1
+    prescription_id: int
+    patient_id: int
+    provider_id: int
+    created_at: datetime
