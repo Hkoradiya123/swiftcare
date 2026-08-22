@@ -43,8 +43,99 @@ class PatientRepository(BaseRepository[Patient]):
         )
         return list(result.scalars().all())
 
+    async def list_with_filters(
+        self,
+        page: int,
+        size: int,
+        provider_id: Optional[int] = None,
+        from_date: Optional[date] = None,
+        to_date: Optional[date] = None,
+    ) -> tuple[List[Patient], int, dict[int, list]]:
+        from datetime import date as dt_date
+        from sqlalchemy import cast, Date, func
+        from app.models.appointment import Appointment
+
+        offset = (page - 1) * size
+        has_appt_filter = (provider_id is not None) or (from_date is not None) or (to_date is not None)
+
+        if has_appt_filter:
+            stmt = select(Patient).join(Appointment, Appointment.patient_id == Patient.id)
+            count_stmt = select(func.count(func.distinct(Patient.id))).join(
+                Appointment, Appointment.patient_id == Patient.id
+            )
+
+            filters = [
+                Patient.deleted_at.is_(None),
+                Appointment.deleted_at.is_(None),
+            ]
+            if provider_id is not None:
+                filters.append(Appointment.provider_id == provider_id)
+            if from_date is not None:
+                filters.append(cast(Appointment.scheduled_start, Date) >= from_date)
+            if to_date is not None:
+                filters.append(cast(Appointment.scheduled_start, Date) <= to_date)
+
+            stmt = (
+                stmt.where(*filters)
+                .distinct()
+                .options(selectinload(Patient.user))
+                .order_by(Patient.id)
+                .offset(offset)
+                .limit(size)
+            )
+            count_stmt = count_stmt.where(*filters)
+
+            result = await self.db.execute(stmt)
+            patients = list(result.scalars().all())
+
+            count_res = await self.db.execute(count_stmt)
+            total = count_res.scalar() or 0
+
+            # Map appointments for returned patients matching the filters
+            patient_ids = [p.id for p in patients]
+            appt_map: dict[int, list] = {}
+            if patient_ids:
+                appt_stmt = select(Appointment).where(
+                    Appointment.patient_id.in_(patient_ids),
+                    Appointment.deleted_at.is_(None),
+                )
+                if provider_id is not None:
+                    appt_stmt = appt_stmt.where(Appointment.provider_id == provider_id)
+                if from_date is not None:
+                    appt_stmt = appt_stmt.where(cast(Appointment.scheduled_start, Date) >= from_date)
+                if to_date is not None:
+                    appt_stmt = appt_stmt.where(cast(Appointment.scheduled_start, Date) <= to_date)
+
+                appt_res = await self.db.execute(
+                    appt_stmt.order_by(Appointment.scheduled_start.desc())
+                )
+                for appt in appt_res.scalars().all():
+                    appt_map.setdefault(appt.patient_id, []).append(appt)
+
+            return patients, total, appt_map
+        else:
+            stmt = (
+                select(Patient)
+                .where(Patient.deleted_at.is_(None))
+                .options(selectinload(Patient.user))
+                .order_by(Patient.id)
+                .offset(offset)
+                .limit(size)
+            )
+            count_stmt = select(func.count(Patient.id)).where(Patient.deleted_at.is_(None))
+
+            result = await self.db.execute(stmt)
+            patients = list(result.scalars().all())
+
+            count_res = await self.db.execute(count_stmt)
+            total = count_res.scalar() or 0
+
+            return patients, total, {}
+
     async def create(self, patient: Patient) -> Patient:
         self.db.add(patient)
         await self.db.flush()
         await self.db.refresh(patient)
         return patient
+
+

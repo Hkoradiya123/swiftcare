@@ -49,25 +49,88 @@ class PatientService:
         patient = await self.repo.get_by_id_with_user(patient.id)
         return _to_read(patient)
 
-    async def get(self, patient_id: int) -> PatientRead:
+    async def get(self, patient_id: int, current_user: User) -> PatientRead:
         patient = await self.repo.get_by_id_with_user(patient_id)
         if not patient:
             raise HTTPException(status_code=404, detail="Patient not found")
+
+        if current_user.role == "admin":
+            return _to_read(patient)
+
+        if current_user.role == "patient":
+            if patient.user_id != current_user.id:
+                raise HTTPException(status_code=403, detail="Access denied")
+            return _to_read(patient)
+
+        if current_user.role == "provider":
+            from app.repositories.appointment import AppointmentRepository
+            from app.repositories.provider import ProviderRepository
+            provider = await ProviderRepository(self.db).get_by_user_id(current_user.id)
+            if not provider:
+                raise HTTPException(status_code=403, detail="Access denied")
+            has_rel = await AppointmentRepository(self.db).has_appointment_with_patient(
+                provider.id, patient_id
+            )
+            if not has_rel:
+                raise HTTPException(status_code=403, detail="Access denied")
+            return _to_read(patient)
+
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    async def get_me(self, current_user: User) -> PatientRead:
+        patient = await self.repo.get_by_user_id(current_user.id)
+        if not patient:
+            raise HTTPException(status_code=404, detail="Patient profile not found for this user")
         return _to_read(patient)
 
+
     async def list_all(
-        self, page: int, size: int
+        self,
+        page: int,
+        size: int,
+        current_user: User,
+        provider_id: Optional[int] = None,
+        from_date: Optional[date] = None,
+        to_date: Optional[date] = None,
     ) -> PaginatedResponse[PatientRead]:
-        total = await self.repo.count()
-        patients = await self.repo.list_all(page, size)
+        from app.schemas.patient import AppointmentSummary
+
+        target_provider_id = provider_id
+
+        if current_user.role == "provider":
+            from app.repositories.provider import ProviderRepository
+            provider = await ProviderRepository(self.db).get_by_user_id(current_user.id)
+            if not provider:
+                return PaginatedResponse(items=[], total=0, page=page, size=size, pages=0)
+            target_provider_id = provider.id
+
+        patients, total, appt_map = await self.repo.list_with_filters(
+            page=page,
+            size=size,
+            provider_id=target_provider_id,
+            from_date=from_date,
+            to_date=to_date,
+        )
+
+        items = []
+        for p in patients:
+            p_read = _to_read(p)
+            if p.id in appt_map:
+                p_read.appointments = [
+                    AppointmentSummary.model_validate(appt) for appt in appt_map[p.id]
+                ]
+            items.append(p_read)
+
         pages = -(-total // size) if size > 0 else 0
         return PaginatedResponse(
-            items=[_to_read(p) for p in patients],
+            items=items,
             total=total,
             page=page,
             size=size,
             pages=pages,
         )
+
+
 
     async def update(
         self, patient_id: int, data: PatientUpdate, current_user: User

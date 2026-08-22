@@ -31,6 +31,24 @@ class PatientUpdate(BaseModel):
     address: Optional[str] = None
 
 
+from datetime import datetime
+
+
+class AppointmentSummary(BaseModel):
+    id: int
+    provider_id: int
+    appointment_type: str
+    status: str
+    scheduled_start: datetime
+    scheduled_end: datetime
+    reason: str
+    notes: Optional[str] = None
+    room_number: Optional[str] = None
+    meeting_link: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
 class PatientRead(BaseModel):
     id: int
     user_id: int
@@ -40,5 +58,7 @@ class PatientRead(BaseModel):
     address: Optional[str] = None
     full_name: str
     email: str
+    appointments: Optional[list[AppointmentSummary]] = None
 
     model_config = {"from_attributes": True}
+

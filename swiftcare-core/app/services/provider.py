@@ -16,6 +16,18 @@ from app.schemas.provider import (
 
 
 def _to_read(provider: Provider) -> ProviderRead:
+    avails = []
+    if hasattr(provider, "availability") and provider.availability:
+        avails = [
+            ProviderAvailabilityRead(
+                id=a.id,
+                weekday=a.weekday,
+                start_time=str(a.start_time),
+                end_time=str(a.end_time),
+            )
+            for a in provider.availability
+        ]
+
     return ProviderRead(
         id=provider.id,
         user_id=provider.user_id,
@@ -25,6 +37,7 @@ def _to_read(provider: Provider) -> ProviderRead:
         default_slot_minutes=provider.default_slot_minutes,
         full_name=provider.user.full_name,
         email=provider.user.email,
+        availabilities=avails,
     )
 
 
@@ -36,7 +49,23 @@ class ProviderService:
     async def create(
         self, data: ProviderCreate, current_user: User
     ) -> ProviderRead:
-        existing = await self.repo.get_by_user_id(current_user.id)
+        target_user_id = current_user.id
+
+        if current_user.role == "admin" and data.user_id:
+            target_user_id = data.user_id
+            from app.repositories.user import UserRepository
+            user_repo = UserRepository(self.db)
+            target_user = await user_repo.get_by_id(target_user_id)
+            if not target_user:
+                raise HTTPException(status_code=404, detail="Target user not found")
+            if target_user.role != "provider":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Target user must have role 'provider'",
+                )
+
+
+        existing = await self.repo.get_by_user_id(target_user_id)
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -44,13 +73,14 @@ class ProviderService:
             )
 
         provider = Provider(
-            user_id=current_user.id,
+            user_id=target_user_id,
             specialization=data.specialization,
             license_number=data.license_number,
             consultation_fee=data.consultation_fee,
             default_slot_minutes=data.default_slot_minutes,
         )
         provider = await self.repo.create(provider)
+
         await self.db.commit()
         provider = await self.repo.get_by_id_with_user(provider.id)
         return _to_read(provider)
@@ -59,6 +89,37 @@ class ProviderService:
         provider = await self.repo.get_by_id_with_user(provider_id)
         if not provider:
             raise HTTPException(status_code=404, detail="Provider not found")
+        return _to_read(provider)
+
+    async def get_me(self, current_user: User) -> ProviderRead:
+        provider = await self.repo.get_by_user_id(current_user.id)
+        if not provider:
+            raise HTTPException(status_code=404, detail="Provider profile not found for this user")
+        return _to_read(provider)
+
+    async def update(
+        self, provider_id: int, data: ProviderUpdate, current_user: User
+    ) -> ProviderRead:
+        provider = await self.repo.get_by_id_with_user(provider_id)
+        if not provider:
+            raise HTTPException(status_code=404, detail="Provider not found")
+
+        if current_user.role != "admin" and provider.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        if data.specialization is not None:
+            provider.specialization = data.specialization
+        if data.consultation_fee is not None:
+            if data.consultation_fee <= 0:
+                raise HTTPException(status_code=400, detail="Fee must be positive")
+            provider.consultation_fee = data.consultation_fee
+        if data.default_slot_minutes is not None:
+            if data.default_slot_minutes not in (15, 20, 30, 45, 60):
+                raise HTTPException(status_code=400, detail="Slot must be 15/20/30/45/60 minutes")
+            provider.default_slot_minutes = data.default_slot_minutes
+
+        await self.db.commit()
+        provider = await self.repo.get_by_id_with_user(provider_id)
         return _to_read(provider)
 
     async def list_all(
@@ -103,6 +164,15 @@ class ProviderService:
                 detail="end_time must be after start_time",
             )
 
+        existing_shifts = await self.repo.get_availabilities_by_weekday(provider_id, data.weekday)
+        for slot in existing_shifts:
+            if max(start, slot.start_time) < min(end, slot.end_time):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Availability slot ({data.start_time} - {data.end_time}) overlaps with existing slot ({slot.start_time} - {slot.end_time})",
+                )
+
+
         avail = ProviderAvailability(
             provider_id=provider_id,
             weekday=data.weekday,
@@ -118,3 +188,154 @@ class ProviderService:
             start_time=str(avail.start_time),
             end_time=str(avail.end_time),
         )
+
+    async def add_availabilities_bulk(
+        self, provider_id: int, data_list: list[ProviderAvailabilityCreate], current_user: User
+    ) -> list[ProviderAvailabilityRead]:
+        provider = await self.repo.get_by_id_with_user(provider_id)
+        if not provider:
+            raise HTTPException(status_code=404, detail="Provider not found")
+
+        if provider.user_id != current_user.id and current_user.role != "admin":
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        created_avails: list[ProviderAvailability] = []
+
+        parsed_items = []
+        for idx, item in enumerate(data_list):
+            start = time.fromisoformat(item.start_time)
+            end = time.fromisoformat(item.end_time)
+            if end <= start:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Item {idx}: end_time must be after start_time",
+                )
+            parsed_items.append((item, start, end))
+
+        for i in range(len(parsed_items)):
+            item1, s1, e1 = parsed_items[i]
+            for j in range(i + 1, len(parsed_items)):
+                item2, s2, e2 = parsed_items[j]
+                if item1.weekday == item2.weekday and max(s1, s2) < min(e1, e2):
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"Batch payload contains overlapping slots on weekday {item1.weekday} ({item1.start_time}-{item1.end_time} and {item2.start_time}-{item2.end_time})",
+                    )
+
+        for item, start, end in parsed_items:
+            existing_shifts = await self.repo.get_availabilities_by_weekday(provider_id, item.weekday)
+            for slot in existing_shifts:
+                if max(start, slot.start_time) < min(end, slot.end_time):
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"Availability slot ({item.start_time} - {item.end_time}) overlaps with existing slot ({slot.start_time} - {slot.end_time})",
+                    )
+            avail = ProviderAvailability(
+                provider_id=provider_id,
+                weekday=item.weekday,
+                start_time=start,
+                end_time=end,
+            )
+            avail = await self.repo.add_availability(avail)
+            created_avails.append(avail)
+
+        await self.db.commit()
+
+        return [
+            ProviderAvailabilityRead(
+                id=a.id,
+                weekday=a.weekday,
+                start_time=str(a.start_time),
+                end_time=str(a.end_time),
+            )
+            for a in created_avails
+        ]
+
+
+    async def list_availabilities(
+        self, provider_id: int
+    ) -> list[ProviderAvailabilityRead]:
+        provider = await self.repo.get_by_id_with_user(provider_id)
+        if not provider:
+            raise HTTPException(status_code=404, detail="Provider not found")
+
+        availabilities = await self.repo.get_all_availabilities(provider_id)
+        return [
+            ProviderAvailabilityRead(
+                id=a.id,
+                weekday=a.weekday,
+                start_time=str(a.start_time),
+                end_time=str(a.end_time),
+            )
+            for a in availabilities
+        ]
+
+    async def update_availability(
+        self,
+        provider_id: int,
+        slot_id: int,
+        data: ProviderAvailabilityUpdate,
+        current_user: User,
+    ) -> ProviderAvailabilityRead:
+        provider = await self.repo.get_by_id_with_user(provider_id)
+        if not provider:
+            raise HTTPException(status_code=404, detail="Provider not found")
+
+        if provider.user_id != current_user.id and current_user.role != "admin":
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        slot = await self.repo.get_availability_by_id(slot_id)
+        if not slot or slot.provider_id != provider_id:
+            raise HTTPException(status_code=404, detail="Availability slot not found")
+
+        new_weekday = data.weekday if data.weekday is not None else slot.weekday
+        new_start = time.fromisoformat(data.start_time) if data.start_time is not None else slot.start_time
+        new_end = time.fromisoformat(data.end_time) if data.end_time is not None else slot.end_time
+
+        if new_end <= new_start:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="end_time must be after start_time",
+            )
+
+        existing_shifts = await self.repo.get_availabilities_by_weekday(provider_id, new_weekday)
+        for existing in existing_shifts:
+            if existing.id == slot_id:
+                continue
+            if max(new_start, existing.start_time) < min(new_end, existing.end_time):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Updated availability slot overlaps with existing slot ({existing.start_time} - {existing.end_time})",
+                )
+
+        slot.weekday = new_weekday
+        slot.start_time = new_start
+        slot.end_time = new_end
+
+        slot = await self.repo.update_availability(slot)
+        await self.db.commit()
+
+        return ProviderAvailabilityRead(
+            id=slot.id,
+            weekday=slot.weekday,
+            start_time=str(slot.start_time),
+            end_time=str(slot.end_time),
+        )
+
+    async def delete_availability(
+        self, provider_id: int, slot_id: int, current_user: User
+    ) -> None:
+        provider = await self.repo.get_by_id_with_user(provider_id)
+        if not provider:
+            raise HTTPException(status_code=404, detail="Provider not found")
+
+        if provider.user_id != current_user.id and current_user.role != "admin":
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        slot = await self.repo.get_availability_by_id(slot_id)
+        if not slot or slot.provider_id != provider_id:
+            raise HTTPException(status_code=404, detail="Availability slot not found")
+
+        await self.repo.delete_availability(slot)
+        await self.db.commit()
+

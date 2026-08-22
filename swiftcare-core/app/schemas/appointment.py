@@ -43,6 +43,7 @@ class AppointmentRead(BaseModel):
 
 
 class AppointmentFilter(BaseModel):
+    patient_id: Optional[int] = None
     provider_id: Optional[int] = None
     status: Optional[AppointmentStatus] = None
     date: Optional[str] = None  # YYYY-MM-DD

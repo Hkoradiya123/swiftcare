@@ -1,3 +1,13 @@
+import sys
+from pathlib import Path
+
+# Add swiftcare-contracts to sys.path
+contracts_dir = str(Path(__file__).resolve().parents[2] / "swiftcare-contracts")
+if contracts_dir not in sys.path:
+    sys.path.insert(0, contracts_dir)
+
+from sqlalchemy import update
+
 import pytest
 import pytest_asyncio
 from collections import defaultdict
@@ -5,6 +15,7 @@ from httpx import ASGITransport, AsyncClient
 from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
+
 
 import app.models  # Register all ORM models on Base.metadata
 from app.db.base import Base
@@ -90,11 +101,22 @@ async def client():
 # ── Shared scenario helpers ────────────────────────────────────────────
 
 async def _register_login(client: AsyncClient, email: str, role: str, full_name: str) -> dict:
+    """Register a user (always PATIENT) then patch role in DB if needed."""
+    from app.models.user import User as UserModel
     res = await client.post("/api/v1/auth/register", json={
-        "email": email, "password": "Password123!", "full_name": full_name, "role": role,
+        "email": email, "password": "Password123!", "full_name": full_name,
     })
     assert res.status_code == 201, res.text
-    return {"Authorization": f"Bearer {res.json()['access_token']}"}
+    token = res.json()["access_token"]
+
+    if role != "patient":
+        async with TestingSessionLocal() as session:
+            await session.execute(
+                update(UserModel).where(UserModel.email == email).values(role=role)
+            )
+            await session.commit()
+
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest_asyncio.fixture

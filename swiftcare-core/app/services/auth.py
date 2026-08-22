@@ -11,6 +11,7 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
+from app.models.enums import UserRole
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.repositories.user import UserRepository
@@ -43,7 +44,7 @@ class AuthService:
             email=data.email,
             hashed_password=hash_password(data.password),
             full_name=data.full_name,
-            role=data.role.value,
+            role=UserRole.PATIENT.value,
         )
         user = await self.repo.create(user)
         await self.db.commit()

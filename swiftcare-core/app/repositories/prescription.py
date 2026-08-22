@@ -29,6 +29,34 @@ class PrescriptionRepository(BaseRepository[Prescription]):
         )
         return list(result.scalars().all())
 
+    async def list_all(
+        self,
+        patient_id: Optional[int] = None,
+        provider_id: Optional[int] = None,
+        appointment_id: Optional[int] = None,
+        status_filter: Optional[str] = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> list[Prescription]:
+        offset = (page - 1) * page_size
+        stmt = (
+            select(Prescription)
+            .where(Prescription.deleted_at.is_(None))
+            .options(selectinload(Prescription.items))
+            .order_by(Prescription.created_at.desc())
+        )
+        if patient_id is not None:
+            stmt = stmt.where(Prescription.patient_id == patient_id)
+        if provider_id is not None:
+            stmt = stmt.where(Prescription.provider_id == provider_id)
+        if appointment_id is not None:
+            stmt = stmt.where(Prescription.appointment_id == appointment_id)
+        if status_filter is not None:
+            stmt = stmt.where(Prescription.status == status_filter)
+        stmt = stmt.offset(offset).limit(page_size)
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
     async def list_for_appointment(self, appointment_id: int) -> list[Prescription]:
         result = await self.db.execute(
             select(Prescription)

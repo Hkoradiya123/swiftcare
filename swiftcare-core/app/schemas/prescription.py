@@ -73,6 +73,15 @@ class AllergyCreate(BaseModel):
     recorded_by_id: Optional[int] = None
 
 
+class AllergyBody(BaseModel):
+    """Request body for nested /patients/{patient_id}/allergies — patient_id comes from URL."""
+    allergen: str = Field(min_length=1, max_length=100)
+    allergy_type: AllergyType
+    severity: AllergySeverity
+    reaction: Optional[str] = Field(default=None, max_length=500)
+    recorded_by_id: Optional[int] = None
+
+
 class AllergyRead(BaseModel):
     id: int
     patient_id: int
