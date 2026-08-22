@@ -234,3 +234,30 @@ async def test_provider_list_sees_only_own_appointments(client: AsyncClient):
     provider_ids = [a["provider_id"] for a in res.json()]
     assert all(pid == prov1["provider_id"] for pid in provider_ids)
     assert prov2["provider_id"] not in provider_ids
+
+
+# ── PATCH /providers/{id} authorization ────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_provider_cannot_patch_other_provider_profile(client: AsyncClient):
+    prov1 = await _mk_provider(client, "dr.patch.a@swiftcare.io")
+    prov2 = await _mk_provider(client, "dr.patch.b@swiftcare.io")
+    res = await client.patch(
+        f"/api/v1/providers/{prov2['provider_id']}",
+        json={"specialization": "Hacked"},
+        headers=prov1["headers"],
+    )
+    assert res.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_admin_can_patch_any_provider_profile(client: AsyncClient):
+    prov = await _mk_provider(client, "dr.admin.target@swiftcare.io")
+    admin_headers = await _register_login(client, "superadmin@swiftcare.io", "admin", "Super Admin")
+    res = await client.patch(
+        f"/api/v1/providers/{prov['provider_id']}",
+        json={"specialization": "Pediatrics", "consultation_fee": "150.00"},
+        headers=admin_headers,
+    )
+    assert res.status_code == 200
+    assert res.json()["specialization"] == "Pediatrics"
