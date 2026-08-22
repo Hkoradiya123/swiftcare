@@ -49,11 +49,33 @@ class PatientService:
         patient = await self.repo.get_by_id_with_user(patient.id)
         return _to_read(patient)
 
-    async def get(self, patient_id: int) -> PatientRead:
+    async def get(self, patient_id: int, current_user: User) -> PatientRead:
         patient = await self.repo.get_by_id_with_user(patient_id)
         if not patient:
             raise HTTPException(status_code=404, detail="Patient not found")
-        return _to_read(patient)
+
+        if current_user.role == "admin":
+            return _to_read(patient)
+
+        if current_user.role == "patient":
+            if patient.user_id != current_user.id:
+                raise HTTPException(status_code=403, detail="Access denied")
+            return _to_read(patient)
+
+        if current_user.role == "provider":
+            from app.repositories.appointment import AppointmentRepository
+            from app.repositories.provider import ProviderRepository
+            provider = await ProviderRepository(self.db).get_by_user_id(current_user.id)
+            if not provider:
+                raise HTTPException(status_code=403, detail="Access denied")
+            has_rel = await AppointmentRepository(self.db).has_appointment_with_patient(
+                provider.id, patient_id
+            )
+            if not has_rel:
+                raise HTTPException(status_code=403, detail="Access denied")
+            return _to_read(patient)
+
+        raise HTTPException(status_code=403, detail="Access denied")
 
     async def get_me(self, current_user: User) -> PatientRead:
         patient = await self.repo.get_by_user_id(current_user.id)

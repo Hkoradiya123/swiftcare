@@ -1,3 +1,4 @@
+from typing import Optional
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -5,6 +6,7 @@ from app.models.allergy import Allergy
 from app.models.appointment import Appointment
 from app.models.enums import AppointmentStatus, PrescriptionStatus
 from app.models.prescription import Prescription, PrescriptionItem
+from app.models.user import User
 from app.repositories.appointment import AppointmentRepository
 from app.repositories.prescription import AllergyRepository, PrescriptionRepository
 from app.schemas.prescription import AllergyCreate, PrescriptionCreate
@@ -57,11 +59,62 @@ class PrescriptionService:
         await self.db.commit()
         return await self.repo.get_by_id(rx.id)
 
-    async def get(self, rx_id: int) -> Prescription:
+    async def get(self, rx_id: int, current_user: User) -> Prescription:
         rx = await self.repo.get_by_id(rx_id)
         if not rx:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prescription not found")
+
+        if current_user.role == "admin":
+            return rx
+
+        if current_user.role == "patient":
+            from app.repositories.patient import PatientRepository
+            patient = await PatientRepository(self.db).get_by_user_id(current_user.id)
+            if not patient or rx.patient_id != patient.id:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+        elif current_user.role == "provider":
+            from app.repositories.provider import ProviderRepository
+            provider = await ProviderRepository(self.db).get_by_user_id(current_user.id)
+            if not provider or rx.provider_id != provider.id:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
         return rx
+
+    async def list_all(
+        self,
+        current_user: User,
+        patient_id: Optional[int] = None,
+        provider_id: Optional[int] = None,
+        appointment_id: Optional[int] = None,
+        status_filter: Optional[str] = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> list[Prescription]:
+        forced_patient_id = patient_id
+        forced_provider_id = provider_id
+
+        if current_user.role == "patient":
+            from app.repositories.patient import PatientRepository
+            patient = await PatientRepository(self.db).get_by_user_id(current_user.id)
+            if not patient:
+                return []
+            forced_patient_id = patient.id
+        elif current_user.role == "provider":
+            from app.repositories.provider import ProviderRepository
+            provider = await ProviderRepository(self.db).get_by_user_id(current_user.id)
+            if not provider:
+                return []
+            forced_provider_id = provider.id
+
+        return await self.repo.list_all(
+            patient_id=forced_patient_id,
+            provider_id=forced_provider_id,
+            appointment_id=appointment_id,
+            status_filter=status_filter,
+            page=page,
+            page_size=page_size,
+        )
 
     async def list_for_patient(self, patient_id: int) -> list[Prescription]:
         return await self.repo.list_for_patient(patient_id)

@@ -68,17 +68,17 @@ async def list_patients(
 @router.get("/{patient_id}", response_model=PatientRead)
 async def get_patient(
     patient_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(UserRole.PATIENT, UserRole.PROVIDER, UserRole.ADMIN)),
     db: AsyncSession = Depends(get_db),
 ) -> PatientRead:
-    return await PatientService(db).get(patient_id)
+    return await PatientService(db).get(patient_id, current_user)
 
 
 @router.patch("/{patient_id}", response_model=PatientRead)
 async def update_patient(
     patient_id: int,
     data: PatientUpdate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(UserRole.PATIENT, UserRole.ADMIN)),
     db: AsyncSession = Depends(get_db),
 ) -> PatientRead:
     return await PatientService(db).update(patient_id, data, current_user)

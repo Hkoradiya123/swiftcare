@@ -13,6 +13,7 @@ from app.schemas.provider import (
     ProviderAvailabilityUpdate,
     ProviderCreate,
     ProviderRead,
+    ProviderUpdate,
 )
 from app.services.provider import ProviderService
 
@@ -45,6 +46,16 @@ async def get_my_provider_profile(
     db: AsyncSession = Depends(get_db),
 ) -> ProviderRead:
     return await ProviderService(db).get_me(current_user)
+
+
+@router.patch("/me", response_model=ProviderRead)
+async def update_my_provider_profile(
+    data: ProviderUpdate,
+    current_user: User = Depends(require_role(UserRole.PROVIDER)),
+    db: AsyncSession = Depends(get_db),
+) -> ProviderRead:
+    provider = await ProviderService(db).get_me(current_user)
+    return await ProviderService(db).update(provider.id, data, current_user)
 
 
 @router.get("/me/availability", response_model=list[ProviderAvailabilityRead])
@@ -102,6 +113,16 @@ async def get_provider(
     return await ProviderService(db).get(provider_id)
 
 
+@router.patch("/{provider_id}", response_model=ProviderRead)
+async def update_provider(
+    provider_id: int,
+    data: ProviderUpdate,
+    current_user: User = Depends(require_role(UserRole.ADMIN)),
+    db: AsyncSession = Depends(get_db),
+) -> ProviderRead:
+    return await ProviderService(db).update(provider_id, data, current_user)
+
+
 @router.get("/{provider_id}/availability", response_model=list[ProviderAvailabilityRead])
 async def list_provider_availabilities(
     provider_id: int,
@@ -119,7 +140,7 @@ async def list_provider_availabilities(
 async def add_availability(
     provider_id: int,
     data: Union[ProviderAvailabilityCreate, list[ProviderAvailabilityCreate]],
-    current_user: User = Depends(require_role(UserRole.PROVIDER, UserRole.ADMIN)),
+    current_user: User = Depends(require_role(UserRole.ADMIN)),
     db: AsyncSession = Depends(get_db),
 ) -> Union[ProviderAvailabilityRead, list[ProviderAvailabilityRead]]:
     if isinstance(data, list):
@@ -127,14 +148,12 @@ async def add_availability(
     return await ProviderService(db).add_availability(provider_id, data, current_user)
 
 
-
-
 @router.patch("/{provider_id}/availability/{slot_id}", response_model=ProviderAvailabilityRead)
 async def update_availability(
     provider_id: int,
     slot_id: int,
     data: ProviderAvailabilityUpdate,
-    current_user: User = Depends(require_role(UserRole.PROVIDER, UserRole.ADMIN)),
+    current_user: User = Depends(require_role(UserRole.ADMIN)),
     db: AsyncSession = Depends(get_db),
 ) -> ProviderAvailabilityRead:
     return await ProviderService(db).update_availability(provider_id, slot_id, data, current_user)
@@ -144,7 +163,7 @@ async def update_availability(
 async def delete_availability(
     provider_id: int,
     slot_id: int,
-    current_user: User = Depends(require_role(UserRole.PROVIDER, UserRole.ADMIN)),
+    current_user: User = Depends(require_role(UserRole.ADMIN)),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     await ProviderService(db).delete_availability(provider_id, slot_id, current_user)

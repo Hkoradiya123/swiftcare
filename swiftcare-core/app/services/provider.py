@@ -97,6 +97,30 @@ class ProviderService:
             raise HTTPException(status_code=404, detail="Provider profile not found for this user")
         return _to_read(provider)
 
+    async def update(
+        self, provider_id: int, data: ProviderUpdate, current_user: User
+    ) -> ProviderRead:
+        provider = await self.repo.get_by_id_with_user(provider_id)
+        if not provider:
+            raise HTTPException(status_code=404, detail="Provider not found")
+
+        if current_user.role != "admin" and provider.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        if data.specialization is not None:
+            provider.specialization = data.specialization
+        if data.consultation_fee is not None:
+            if data.consultation_fee <= 0:
+                raise HTTPException(status_code=400, detail="Fee must be positive")
+            provider.consultation_fee = data.consultation_fee
+        if data.default_slot_minutes is not None:
+            if data.default_slot_minutes not in (15, 20, 30, 45, 60):
+                raise HTTPException(status_code=400, detail="Slot must be 15/20/30/45/60 minutes")
+            provider.default_slot_minutes = data.default_slot_minutes
+
+        await self.db.commit()
+        provider = await self.repo.get_by_id_with_user(provider_id)
+        return _to_read(provider)
 
     async def list_all(
         self, page: int, size: int, specialization: str | None = None

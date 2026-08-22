@@ -27,9 +27,19 @@ class AppointmentRepository(BaseRepository[Appointment]):
         result = await self.db.execute(stmt)
         return result.first() is not None
 
+    async def has_appointment_with_patient(self, provider_id: int, patient_id: int) -> bool:
+        stmt = select(Appointment.id).where(
+            Appointment.provider_id == provider_id,
+            Appointment.patient_id == patient_id,
+            Appointment.deleted_at.is_(None),
+        )
+        result = await self.db.execute(stmt)
+        return result.first() is not None
+
     async def list_filtered(
         self,
         provider_id: Optional[int],
+        patient_id: Optional[int],
         status: Optional[str],
         date: Optional[str],
         offset: int,
@@ -38,6 +48,8 @@ class AppointmentRepository(BaseRepository[Appointment]):
         stmt = select(Appointment).where(Appointment.deleted_at.is_(None))
         if provider_id:
             stmt = stmt.where(Appointment.provider_id == provider_id)
+        if patient_id:
+            stmt = stmt.where(Appointment.patient_id == patient_id)
         if status:
             stmt = stmt.where(Appointment.status == status)
         if date:
