@@ -3,7 +3,7 @@ Security / OLAC tests for P0 fixes:
 - Register never grants provider/admin role via request body
 - Patient GET/PATCH access control
 - Appointment GET/LIST scoping
-- Prescription GET access control
+- Prescription GET/LIST access control
 - Provider availability admin-only write guard
 """
 import pytest
@@ -147,3 +147,90 @@ async def test_provider_cannot_write_other_provider_availability(client: AsyncCl
         headers=prov1["headers"],
     )
     assert res.status_code == 403
+
+
+# ── Prescription OLAC ───────────────────────────────────────────────────
+
+async def _completed_appt_and_rx(client: AsyncClient, prov: dict, pat: dict, start: str, end: str) -> int:
+    """Creates a completed appointment and a prescription. Returns rx_id."""
+    appt_id = await _mk_appointment(client, prov, pat, start, end)
+    await client.post(f"/api/v1/appointments/{appt_id}/check-in", headers=prov["headers"])
+    await client.post(f"/api/v1/appointments/{appt_id}/complete", headers=prov["headers"])
+    rx_res = await client.post("/api/v1/prescriptions", headers=prov["headers"], json={
+        "appointment_id": appt_id,
+        "patient_id": pat["patient_id"],
+        "items": [{
+            "drug_name": "Ibuprofen", "dosage_amount": "400", "dosage_unit": "mg",
+            "frequency_per_day": 3, "duration_days": 5,
+        }],
+    })
+    assert rx_res.status_code == 201, rx_res.text
+    return rx_res.json()["id"]
+
+
+@pytest.mark.asyncio
+async def test_patient_can_get_own_prescription(client: AsyncClient):
+    prov = await _mk_provider(client, "dr.rx.own@swiftcare.io")
+    pat = await _mk_patient(client, "rx.own@swiftcare.io")
+    rx_id = await _completed_appt_and_rx(client, prov, pat, "2027-04-01T09:00:00+00:00", "2027-04-01T09:30:00+00:00")
+    res = await client.get(f"/api/v1/prescriptions/{rx_id}", headers=pat["headers"])
+    assert res.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_patient_cannot_get_other_patient_prescription(client: AsyncClient):
+    prov = await _mk_provider(client, "dr.rx.cross@swiftcare.io")
+    pat1 = await _mk_patient(client, "rx.cross1@swiftcare.io")
+    pat2 = await _mk_patient(client, "rx.cross2@swiftcare.io")
+    rx_id = await _completed_appt_and_rx(client, prov, pat1, "2027-04-02T09:00:00+00:00", "2027-04-02T09:30:00+00:00")
+    res = await client.get(f"/api/v1/prescriptions/{rx_id}", headers=pat2["headers"])
+    assert res.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_provider_can_get_own_prescription(client: AsyncClient):
+    prov = await _mk_provider(client, "dr.rx.self@swiftcare.io")
+    pat = await _mk_patient(client, "rx.self.pat@swiftcare.io")
+    rx_id = await _completed_appt_and_rx(client, prov, pat, "2027-04-03T09:00:00+00:00", "2027-04-03T09:30:00+00:00")
+    res = await client.get(f"/api/v1/prescriptions/{rx_id}", headers=prov["headers"])
+    assert res.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_provider_cannot_get_other_provider_prescription(client: AsyncClient):
+    prov1 = await _mk_provider(client, "dr.rx.a@swiftcare.io")
+    prov2 = await _mk_provider(client, "dr.rx.b@swiftcare.io")
+    pat = await _mk_patient(client, "rx.shared.pat@swiftcare.io")
+    rx_id = await _completed_appt_and_rx(client, prov1, pat, "2027-04-04T09:00:00+00:00", "2027-04-04T09:30:00+00:00")
+    res = await client.get(f"/api/v1/prescriptions/{rx_id}", headers=prov2["headers"])
+    assert res.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_get_prescriptions_list_patient_sees_only_own(client: AsyncClient):
+    prov = await _mk_provider(client, "dr.rxlist@swiftcare.io")
+    pat1 = await _mk_patient(client, "rxlist.p1@swiftcare.io")
+    pat2 = await _mk_patient(client, "rxlist.p2@swiftcare.io")
+    await _completed_appt_and_rx(client, prov, pat1, "2027-05-01T09:00:00+00:00", "2027-05-01T09:30:00+00:00")
+    await _completed_appt_and_rx(client, prov, pat2, "2027-05-01T10:00:00+00:00", "2027-05-01T10:30:00+00:00")
+
+    res = await client.get("/api/v1/prescriptions", headers=pat1["headers"])
+    assert res.status_code == 200
+    patient_ids = [r["patient_id"] for r in res.json()]
+    assert all(pid == pat1["patient_id"] for pid in patient_ids)
+    assert pat2["patient_id"] not in patient_ids
+
+
+@pytest.mark.asyncio
+async def test_provider_list_sees_only_own_appointments(client: AsyncClient):
+    prov1 = await _mk_provider(client, "dr.provlist1@swiftcare.io")
+    prov2 = await _mk_provider(client, "dr.provlist2@swiftcare.io")
+    pat = await _mk_patient(client, "provlist.pat@swiftcare.io")
+    await _mk_appointment(client, prov1, pat, "2027-06-01T09:00:00+00:00", "2027-06-01T09:30:00+00:00")
+    await _mk_appointment(client, prov2, pat, "2027-06-01T10:00:00+00:00", "2027-06-01T10:30:00+00:00")
+
+    res = await client.get("/api/v1/appointments", headers=prov1["headers"])
+    assert res.status_code == 200
+    provider_ids = [a["provider_id"] for a in res.json()]
+    assert all(pid == prov1["provider_id"] for pid in provider_ids)
+    assert prov2["provider_id"] not in provider_ids
