@@ -19,6 +19,7 @@ from app.models.enums import AppointmentType
 from app.models.patient import Patient
 from app.models.provider import Provider
 from app.models.user import User
+from app.models.visit_summary import VisitSummary
 from app.repositories.appointment import AppointmentRepository
 from app.schemas.appointment import AppointmentCreate, AppointmentFilter
 from app.events.publisher import publish
@@ -135,13 +136,23 @@ class AppointmentService:
         await self.db.commit()
         return appt
 
-    async def complete(self, appt_id: int) -> Appointment:
+    async def complete(
+        self, appt_id: int, summary: str, diagnosis: str | None = None
+    ) -> tuple[Appointment, int]:
         appt = await self._fetch(appt_id)
         try:
             appt.complete()
         except DomainError as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-        await self.db.commit()
+
+        vs = VisitSummary(
+            appointment_id=appt.id,
+            patient_id=appt.patient_id,
+            summary=summary,
+            diagnosis=diagnosis,
+        )
+        self.db.add(vs)
+        await self.db.flush()  # get vs.id before commit
 
         patient_row = (await self.db.execute(
             select(Patient).options(joinedload(Patient.user)).where(Patient.id == appt.patient_id)
@@ -149,6 +160,8 @@ class AppointmentService:
         provider_row = (await self.db.execute(
             select(Provider).options(joinedload(Provider.user)).where(Provider.id == appt.provider_id)
         )).scalar_one()
+
+        await self.db.commit()
 
         await publish(AppointmentCompletedEvent(
             event_id=uuid4(),
@@ -162,7 +175,7 @@ class AppointmentService:
             reason=appt.reason,
             notes=appt.notes,
         ))
-        return appt
+        return appt, vs.id
 
     async def cancel(self, appt_id: int) -> Appointment:
         appt = await self._fetch(appt_id)
