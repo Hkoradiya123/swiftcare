@@ -1,0 +1,2210 @@
+diff --git a/.agent/skills/agent-log/SKILL.md b/.agent/skills/agent-log/SKILL.md
+deleted file mode 100644
+index 21c9061..0000000
+--- a/.agent/skills/agent-log/SKILL.md
++++ /dev/null
+@@ -1,14 +0,0 @@
+----
+-name: agent-log
+-description: Append session activity logs to AGENT_LOG.md at the end of work sessions. Use when updating or recording changes in AGENT_LOG.md.
+----
+-
+-# Agent Session Logging
+-
+-At the end of every work session where code files were modified, append an entry to `AGENT_LOG.md` at the repository root.
+-
+-## Format
+-```markdown
+-## YYYY-MM-DD — <short session goal>
+-- `path/to/file.py` — what changed (one line per file)
+-```
+diff --git a/.env.example b/.env.example
+index 9fc46f4..584a229 100644
+--- a/.env.example
++++ b/.env.example
+@@ -1 +1,22 @@
+-DATABASE_URL=postgresql://postgres:<YOUR_PASSWORD>@db.<YOUR_PROJECT>.supabase.co:5432/postgres
++DATABASE_URL=postgresql+asyncpg://postgres:<YOUR_PASSWORD>@db.<YOUR_PROJECT>.supabase.co:5432/postgres
++
++# App
++DEBUG=true
++ENVIRONMENT=development
++
++# JWT
++SECRET_KEY=change-me-in-production
++ALGORITHM=HS256
++ACCESS_TOKEN_EXPIRE_MINUTES=60
++REFRESH_TOKEN_EXPIRE_DAYS=30
++
++# Redis
++REDIS_URL=redis://localhost:6379/0
++
++# SMTP
++MOCK_SMTP=false
++SMTP_HOST=smtp.gmail.com
++SMTP_PORT=587
++SMTP_USER=your_email@gmail.com
++SMTP_PASS=your_app_password
++MAIL_FROM=your_email@gmail.com
+diff --git a/docker-compose.yml b/docker-compose.yml
+index 6fffc15..97b2975 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -58,6 +58,8 @@ services:
+         condition: service_healthy
+       minio:
+         condition: service_healthy
++      mailhog:
++        condition: service_started
+     environment:
+       DATABASE_URL: postgresql+asyncpg://notify:notify@notify-db:5432/swiftcare_notify
+       REDIS_URL: redis://redis:6379/0
+@@ -66,6 +68,10 @@ services:
+       S3_ACCESS_KEY: swiftcare
+       S3_SECRET_KEY: swiftcare123
+       S3_BUCKET: swiftcare-docs
++      SMTP_HOST: mailhog
++      SMTP_PORT: 1025
++      MAIL_FROM: noreply@swiftcare.local
++      MOCK_SMTP: "false"
+     restart: unless-stopped
+ 
+   celery-worker:
+@@ -78,6 +84,8 @@ services:
+         condition: service_healthy
+       minio:
+         condition: service_healthy
++      mailhog:
++        condition: service_started
+     environment:
+       DATABASE_URL: postgresql+asyncpg://notify:notify@notify-db:5432/swiftcare_notify
+       REDIS_URL: redis://redis:6379/0
+@@ -85,6 +93,10 @@ services:
+       S3_ACCESS_KEY: swiftcare
+       S3_SECRET_KEY: swiftcare123
+       S3_BUCKET: swiftcare-docs
++      SMTP_HOST: mailhog
++      SMTP_PORT: 1025
++      MAIL_FROM: noreply@swiftcare.local
++      MOCK_SMTP: "false"
+     restart: unless-stopped
+ 
+   celery-beat:
+@@ -95,11 +107,23 @@ services:
+         condition: service_healthy
+       redis:
+         condition: service_healthy
++      mailhog:
++        condition: service_started
+     environment:
+       DATABASE_URL: postgresql+asyncpg://notify:notify@notify-db:5432/swiftcare_notify
+       REDIS_URL: redis://redis:6379/0
++      SMTP_HOST: mailhog
++      SMTP_PORT: 1025
++      MAIL_FROM: noreply@swiftcare.local
++      MOCK_SMTP: "false"
+     restart: unless-stopped
+ 
++  mailhog:
++    image: mailhog/mailhog
++    ports:
++      - "1025:1025"   # SMTP — services send here
++      - "8025:8025"   # Web UI — open in browser to read caught emails
++
+   minio:
+     image: minio/minio
+     command: server /data --console-address ":9001"
+diff --git a/main.py b/main.py
+index 4497f18..88c77db 100644
+--- a/main.py
++++ b/main.py
+@@ -16,17 +16,16 @@ signal.signal(signal.SIGTERM, shutdown)
+ base = os.path.dirname(__file__)
+ 
+ core = subprocess.Popen(
+-    ["uvicorn", "app.main:app", "--reload", "--port", "8000"],
++    [sys.executable, "-m", "uvicorn", "app.main:app", "--reload", "--port", "8000"],
+     cwd=os.path.join(base, "swiftcare-core"),
+ )
+ processes.append(core)
+ 
+-# relay: uncomment when built
+-# relay = subprocess.Popen(
+-#     ["celery", "-A", "app.celery", "worker", "--loglevel=info"],
+-#     cwd=os.path.join(base, "swiftcare-notify"),
+-# )
+-# processes.append(relay)
++relay = subprocess.Popen(
++    [sys.executable, "-m", "app.main"],
++    cwd=os.path.join(base, "swiftcare-notify"),
++)
++processes.append(relay)
+ 
+ print("SwiftCare started. Ctrl+C to stop.")
+ for p in processes:
+diff --git a/swiftcare-contracts/swiftcare_contracts/events.py b/swiftcare-contracts/swiftcare_contracts/events.py
+index 72470b0..367d85c 100644
+--- a/swiftcare-contracts/swiftcare_contracts/events.py
++++ b/swiftcare-contracts/swiftcare_contracts/events.py
+@@ -43,3 +43,17 @@ class PrescriptionCreatedEvent(BaseModel):
+     patient_id: int
+     provider_id: int
+     created_at: datetime
++    # denormalized so relay never needs to query core DB
++    patient_name: str
++    patient_email: str
++    provider_name: str
++    drug_names: list[str]
++
++
++class PasswordResetRequestedEvent(BaseModel):
++    event_id: UUID
++    event_type: str = "auth.password_reset_requested"
++    schema_version: int = 1
++    user_email: str
++    user_name: str
++    reset_token: str  # raw token — notify sends this in email, core stores only hash
+diff --git a/swiftcare-core/alembic/versions/dbc399b6f17d_add_password_reset_tokens.py b/swiftcare-core/alembic/versions/dbc399b6f17d_add_password_reset_tokens.py
+new file mode 100644
+index 0000000..9b785c0
+--- /dev/null
++++ b/swiftcare-core/alembic/versions/dbc399b6f17d_add_password_reset_tokens.py
+@@ -0,0 +1,47 @@
++"""add password_reset_tokens
++
++Revision ID: dbc399b6f17d
++Revises: d2e3f4a5b6c7
++Create Date: 2026-08-23 18:42:57.623370
++
++"""
++from typing import Sequence, Union
++
++from alembic import op
++import sqlalchemy as sa
++
++
++# revision identifiers, used by Alembic.
++revision: str = 'dbc399b6f17d'
++down_revision: Union[str, Sequence[str], None] = 'd2e3f4a5b6c7'
++branch_labels: Union[str, Sequence[str], None] = None
++depends_on: Union[str, Sequence[str], None] = None
++
++
++def upgrade() -> None:
++    """Upgrade schema."""
++    # ### commands auto generated by Alembic - please adjust! ###
++    op.create_table('password_reset_tokens',
++    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
++    sa.Column('user_id', sa.Integer(), nullable=False),
++    sa.Column('token_hash', sa.String(length=64), nullable=False),
++    sa.Column('expires_at', sa.DateTime(timezone=True), nullable=False),
++    sa.Column('used', sa.Boolean(), nullable=False),
++    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
++    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
++    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
++    sa.PrimaryKeyConstraint('id'),
++    sa.UniqueConstraint('token_hash')
++    )
++    op.create_index(op.f('ix_password_reset_tokens_user_id'), 'password_reset_tokens', ['user_id'], unique=False)
++    op.create_index(op.f('ix_allergies_deleted_at'), 'allergies', ['deleted_at'], unique=False)
++    # ### end Alembic commands ###
++
++
++def downgrade() -> None:
++    """Downgrade schema."""
++    # ### commands auto generated by Alembic - please adjust! ###
++    op.drop_index(op.f('ix_allergies_deleted_at'), table_name='allergies')
++    op.drop_index(op.f('ix_password_reset_tokens_user_id'), table_name='password_reset_tokens')
++    op.drop_table('password_reset_tokens')
++    # ### end Alembic commands ###
+diff --git a/swiftcare-core/app/api/v1/auth.py b/swiftcare-core/app/api/v1/auth.py
+index 9fd98d0..7f6a3ba 100644
+--- a/swiftcare-core/app/api/v1/auth.py
++++ b/swiftcare-core/app/api/v1/auth.py
+@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
+ from app.core.deps import get_current_user
+ from app.db.session import get_db
+ from app.models.user import User
+-from app.schemas.auth import LoginRequest, RefreshRequest, RegisterRequest, TokenResponse, UserRead
++from app.schemas.auth import ChangePasswordRequest, ForgotPasswordRequest, LoginRequest, RefreshRequest, RegisterRequest, ResetPasswordRequest, TokenResponse, UserRead
+ from app.services.auth import AuthService
+ 
+ router = APIRouter(prefix="/auth", tags=["auth"])
+@@ -33,3 +33,22 @@ async def logout(data: RefreshRequest, db: AsyncSession = Depends(get_db)) -> No
+ @router.get("/me", response_model=UserRead)
+ async def me(current_user: User = Depends(get_current_user)) -> User:
+     return current_user
++
++
++@router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
++async def change_password(
++    data: ChangePasswordRequest,
++    current_user: User = Depends(get_current_user),
++    db: AsyncSession = Depends(get_db),
++) -> None:
++    await AuthService(db).change_password(current_user, data)
++
++
++@router.post("/forgot-password", status_code=status.HTTP_204_NO_CONTENT)
++async def forgot_password(data: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)) -> None:
++    await AuthService(db).forgot_password(data)
++
++
++@router.post("/reset-password", status_code=status.HTTP_204_NO_CONTENT)
++async def reset_password(data: ResetPasswordRequest, db: AsyncSession = Depends(get_db)) -> None:
++    await AuthService(db).reset_password(data)
+diff --git a/swiftcare-core/app/api/v1/prescriptions.py b/swiftcare-core/app/api/v1/prescriptions.py
+index 1ef2712..09261f7 100644
+--- a/swiftcare-core/app/api/v1/prescriptions.py
++++ b/swiftcare-core/app/api/v1/prescriptions.py
+@@ -76,7 +76,17 @@ async def cancel_prescription(
+     return await PrescriptionService(db).cancel(rx_id, provider.id)
+ 
+ 
+-# ── Allergies (nested under patient) ───────────────────────────────────
++# ── Allergies ───────────────────────────────────────────────────────────
++
++@router.post(
++    "/allergies",
++    response_model=AllergyRead,
++    status_code=status.HTTP_201_CREATED,
++    dependencies=[Depends(require_role(UserRole.PROVIDER, UserRole.ADMIN))],
++)
++async def create_allergy_flat(body: AllergyCreate, db: AsyncSession = Depends(get_db)):
++    return await AllergyService(db).create(body)
++
+ 
+ @router.post(
+     "/patients/{patient_id}/allergies",
+diff --git a/swiftcare-core/app/api/v1/providers.py b/swiftcare-core/app/api/v1/providers.py
+index d4414b4..9b18805 100644
+--- a/swiftcare-core/app/api/v1/providers.py
++++ b/swiftcare-core/app/api/v1/providers.py
+@@ -11,7 +11,7 @@ from app.schemas.provider import (
+     ProviderAvailabilityCreate,
+     ProviderAvailabilityRead,
+     ProviderAvailabilityUpdate,
+-    ProviderCreate,
++    ProviderOnboard,
+     ProviderRead,
+     ProviderUpdate,
+ )
+@@ -20,6 +20,15 @@ from app.services.provider import ProviderService
+ router = APIRouter(prefix="/providers", tags=["providers"])
+ 
+ 
++@router.post("", response_model=ProviderRead, status_code=status.HTTP_201_CREATED)
++async def onboard_provider(
++    data: ProviderOnboard,
++    _: User = Depends(require_role(UserRole.ADMIN)),
++    db: AsyncSession = Depends(get_db),
++) -> ProviderRead:
++    return await ProviderService(db).onboard(data)
++
++
+ @router.get("", response_model=PaginatedResponse[ProviderRead])
+ async def list_providers(
+     page: int = Query(1, ge=1),
+@@ -30,15 +39,6 @@ async def list_providers(
+ ) -> PaginatedResponse[ProviderRead]:
+     return await ProviderService(db).list_all(page, size, specialization)
+ 
+-@router.post("", response_model=ProviderRead, status_code=status.HTTP_201_CREATED)
+-@router.post("/me", response_model=ProviderRead, status_code=status.HTTP_201_CREATED)
+-async def create_provider(
+-    data: ProviderCreate,
+-    current_user: User = Depends(require_role(UserRole.PROVIDER, UserRole.ADMIN)),
+-    db: AsyncSession = Depends(get_db),
+-) -> ProviderRead:
+-    return await ProviderService(db).create(data, current_user)
+-
+ 
+ @router.get("/me", response_model=ProviderRead)
+ async def get_my_provider_profile(
+@@ -104,15 +104,6 @@ async def delete_my_availability(
+     await ProviderService(db).delete_availability(provider.id, slot_id, current_user)
+ 
+ 
+-@router.get("/{provider_id}", response_model=ProviderRead)
+-async def get_provider(
+-    provider_id: int,
+-    current_user: User = Depends(get_current_user),
+-    db: AsyncSession = Depends(get_db),
+-) -> ProviderRead:
+-    return await ProviderService(db).get(provider_id)
+-
+-
+ @router.patch("/{provider_id}", response_model=ProviderRead)
+ async def update_provider(
+     provider_id: int,
+@@ -123,49 +114,24 @@ async def update_provider(
+     return await ProviderService(db).update(provider_id, data, current_user)
+ 
+ 
+-@router.get("/{provider_id}/availability", response_model=list[ProviderAvailabilityRead])
+-async def list_provider_availabilities(
++@router.get("/{provider_id}", response_model=ProviderRead)
++async def get_provider(
+     provider_id: int,
+     current_user: User = Depends(get_current_user),
+     db: AsyncSession = Depends(get_db),
+-) -> list[ProviderAvailabilityRead]:
+-    return await ProviderService(db).list_availabilities(provider_id)
++) -> ProviderRead:
++    return await ProviderService(db).get(provider_id)
+ 
+ 
+ @router.post(
+     "/{provider_id}/availability",
+-    response_model=Union[ProviderAvailabilityRead, list[ProviderAvailabilityRead]],
++    response_model=ProviderAvailabilityRead,
+     status_code=status.HTTP_201_CREATED,
+ )
+ async def add_availability(
+     provider_id: int,
+-    data: Union[ProviderAvailabilityCreate, list[ProviderAvailabilityCreate]],
+-    current_user: User = Depends(require_role(UserRole.ADMIN)),
+-    db: AsyncSession = Depends(get_db),
+-) -> Union[ProviderAvailabilityRead, list[ProviderAvailabilityRead]]:
+-    if isinstance(data, list):
+-        return await ProviderService(db).add_availabilities_bulk(provider_id, data, current_user)
+-    return await ProviderService(db).add_availability(provider_id, data, current_user)
+-
+-
+-@router.patch("/{provider_id}/availability/{slot_id}", response_model=ProviderAvailabilityRead)
+-async def update_availability(
+-    provider_id: int,
+-    slot_id: int,
+-    data: ProviderAvailabilityUpdate,
++    data: ProviderAvailabilityCreate,
+     current_user: User = Depends(require_role(UserRole.ADMIN)),
+     db: AsyncSession = Depends(get_db),
+ ) -> ProviderAvailabilityRead:
+-    return await ProviderService(db).update_availability(provider_id, slot_id, data, current_user)
+-
+-
+-@router.delete("/{provider_id}/availability/{slot_id}", status_code=status.HTTP_204_NO_CONTENT)
+-async def delete_availability(
+-    provider_id: int,
+-    slot_id: int,
+-    current_user: User = Depends(require_role(UserRole.ADMIN)),
+-    db: AsyncSession = Depends(get_db),
+-) -> None:
+-    await ProviderService(db).delete_availability(provider_id, slot_id, current_user)
+-
+-
++    return await ProviderService(db).add_availability(provider_id, data, current_user)
+diff --git a/swiftcare-core/app/main.py b/swiftcare-core/app/main.py
+index 663d77a..788c43a 100644
+--- a/swiftcare-core/app/main.py
++++ b/swiftcare-core/app/main.py
+@@ -41,3 +41,7 @@ async def health_check():
+         "app_name": settings.app_name,
+         "environment": settings.environment,
+     }
++    
++@app.get("/")
++async def root():
++    return {"message": "Welcome to the SwiftCare API v1.0.0 - Please use /docs for API documentation."}
+\ No newline at end of file
+diff --git a/swiftcare-core/app/models/__init__.py b/swiftcare-core/app/models/__init__.py
+index 7e48ac8..297e41b 100644
+--- a/swiftcare-core/app/models/__init__.py
++++ b/swiftcare-core/app/models/__init__.py
+@@ -1,5 +1,6 @@
+ from app.models.enums import AppointmentStatus, AppointmentType, UserRole
+ from app.models.patient import Patient
++from app.models.password_reset_token import PasswordResetToken
+ from app.models.provider import Provider, ProviderAvailability
+ from app.models.user import User
+ 
+@@ -11,4 +12,5 @@ __all__ = [
+     "Patient",
+     "Provider",
+     "ProviderAvailability",
++    "PasswordResetToken",
+ ]
+diff --git a/swiftcare-core/app/models/password_reset_token.py b/swiftcare-core/app/models/password_reset_token.py
+new file mode 100644
+index 0000000..58fefbb
+--- /dev/null
++++ b/swiftcare-core/app/models/password_reset_token.py
+@@ -0,0 +1,15 @@
++from datetime import datetime
++from sqlalchemy import Boolean, DateTime, ForeignKey, String
++from sqlalchemy.orm import Mapped, mapped_column
++
++from app.db.base import Base, TimestampMixin
++
++
++class PasswordResetToken(Base, TimestampMixin):
++    __tablename__ = "password_reset_tokens"
++
++    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
++    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
++    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
++    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
++    used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+diff --git a/swiftcare-core/app/repositories/appointment.py b/swiftcare-core/app/repositories/appointment.py
+index f29ff04..5868140 100644
+--- a/swiftcare-core/app/repositories/appointment.py
++++ b/swiftcare-core/app/repositories/appointment.py
+@@ -39,11 +39,11 @@ class AppointmentRepository(BaseRepository[Appointment]):
+     async def list_filtered(
+         self,
+         provider_id: Optional[int],
+-        patient_id: Optional[int],
+         status: Optional[str],
+         date: Optional[str],
+         offset: int,
+         limit: int,
++        patient_id: Optional[int] = None,
+     ) -> list[Appointment]:
+         stmt = select(Appointment).where(Appointment.deleted_at.is_(None))
+         if provider_id:
+diff --git a/swiftcare-core/app/repositories/patient.py b/swiftcare-core/app/repositories/patient.py
+index 743fc7f..8410c0b 100644
+--- a/swiftcare-core/app/repositories/patient.py
++++ b/swiftcare-core/app/repositories/patient.py
+@@ -1,3 +1,4 @@
++from datetime import date
+ from typing import List, Optional
+ from sqlalchemy import select
+ from sqlalchemy.orm import selectinload
+@@ -51,7 +52,6 @@ class PatientRepository(BaseRepository[Patient]):
+         from_date: Optional[date] = None,
+         to_date: Optional[date] = None,
+     ) -> tuple[List[Patient], int, dict[int, list]]:
+-        from datetime import date as dt_date
+         from sqlalchemy import cast, Date, func
+         from app.models.appointment import Appointment
+ 
+@@ -63,11 +63,7 @@ class PatientRepository(BaseRepository[Patient]):
+             count_stmt = select(func.count(func.distinct(Patient.id))).join(
+                 Appointment, Appointment.patient_id == Patient.id
+             )
+-
+-            filters = [
+-                Patient.deleted_at.is_(None),
+-                Appointment.deleted_at.is_(None),
+-            ]
++            filters = [Patient.deleted_at.is_(None), Appointment.deleted_at.is_(None)]
+             if provider_id is not None:
+                 filters.append(Appointment.provider_id == provider_id)
+             if from_date is not None:
+@@ -75,23 +71,15 @@ class PatientRepository(BaseRepository[Patient]):
+             if to_date is not None:
+                 filters.append(cast(Appointment.scheduled_start, Date) <= to_date)
+ 
+-            stmt = (
+-                stmt.where(*filters)
+-                .distinct()
+-                .options(selectinload(Patient.user))
+-                .order_by(Patient.id)
+-                .offset(offset)
+-                .limit(size)
+-            )
++            stmt = (stmt.where(*filters).distinct().options(selectinload(Patient.user))
++                    .order_by(Patient.id).offset(offset).limit(size))
+             count_stmt = count_stmt.where(*filters)
+ 
+             result = await self.db.execute(stmt)
+             patients = list(result.scalars().all())
+-
+             count_res = await self.db.execute(count_stmt)
+             total = count_res.scalar() or 0
+ 
+-            # Map appointments for returned patients matching the filters
+             patient_ids = [p.id for p in patients]
+             appt_map: dict[int, list] = {}
+             if patient_ids:
+@@ -105,31 +93,20 @@ class PatientRepository(BaseRepository[Patient]):
+                     appt_stmt = appt_stmt.where(cast(Appointment.scheduled_start, Date) >= from_date)
+                 if to_date is not None:
+                     appt_stmt = appt_stmt.where(cast(Appointment.scheduled_start, Date) <= to_date)
+-
+-                appt_res = await self.db.execute(
+-                    appt_stmt.order_by(Appointment.scheduled_start.desc())
+-                )
++                appt_res = await self.db.execute(appt_stmt.order_by(Appointment.scheduled_start.desc()))
+                 for appt in appt_res.scalars().all():
+                     appt_map.setdefault(appt.patient_id, []).append(appt)
+ 
+             return patients, total, appt_map
+         else:
+-            stmt = (
+-                select(Patient)
+-                .where(Patient.deleted_at.is_(None))
+-                .options(selectinload(Patient.user))
+-                .order_by(Patient.id)
+-                .offset(offset)
+-                .limit(size)
+-            )
+             count_stmt = select(func.count(Patient.id)).where(Patient.deleted_at.is_(None))
+-
+-            result = await self.db.execute(stmt)
++            result = await self.db.execute(
++                select(Patient).where(Patient.deleted_at.is_(None))
++                .options(selectinload(Patient.user)).order_by(Patient.id).offset(offset).limit(size)
++            )
+             patients = list(result.scalars().all())
+-
+             count_res = await self.db.execute(count_stmt)
+             total = count_res.scalar() or 0
+-
+             return patients, total, {}
+ 
+     async def create(self, patient: Patient) -> Patient:
+@@ -137,5 +114,3 @@ class PatientRepository(BaseRepository[Patient]):
+         await self.db.flush()
+         await self.db.refresh(patient)
+         return patient
+-
+-
+diff --git a/swiftcare-core/app/repositories/provider.py b/swiftcare-core/app/repositories/provider.py
+index 79357b9..12b8ed7 100644
+--- a/swiftcare-core/app/repositories/provider.py
++++ b/swiftcare-core/app/repositories/provider.py
+@@ -47,10 +47,7 @@ class ProviderRepository(BaseRepository[Provider]):
+                 Provider.specialization.ilike(f"%{specialization}%"),
+                 Provider.deleted_at.is_(None),
+             )
+-            .options(
+-                selectinload(Provider.user),
+-                selectinload(Provider.availability),
+-            )
++            .options(selectinload(Provider.user))
+             .order_by(Provider.id)
+             .offset(offset)
+             .limit(size)
+@@ -62,34 +59,22 @@ class ProviderRepository(BaseRepository[Provider]):
+         result = await self.db.execute(
+             select(Provider)
+             .where(Provider.deleted_at.is_(None))
+-            .options(
+-                selectinload(Provider.user),
+-                selectinload(Provider.availability),
+-            )
++            .options(selectinload(Provider.user))
+             .order_by(Provider.id)
+             .offset(offset)
+             .limit(size)
+         )
+         return list(result.scalars().all())
+ 
+-
+     async def create(self, provider: Provider) -> Provider:
+         self.db.add(provider)
+         await self.db.flush()
+         await self.db.refresh(provider)
+         return provider
+ 
+-    async def add_availability(
+-        self, avail: ProviderAvailability
+-    ) -> ProviderAvailability:
+-        self.db.add(avail)
+-        await self.db.flush()
+-        await self.db.refresh(avail)
+-        return avail
+-
+     async def get_availabilities_by_weekday(
+         self, provider_id: int, weekday: int
+-    ) -> List[ProviderAvailability]:
++    ) -> list[ProviderAvailability]:
+         result = await self.db.execute(
+             select(ProviderAvailability).where(
+                 ProviderAvailability.provider_id == provider_id,
+@@ -98,18 +83,13 @@ class ProviderRepository(BaseRepository[Provider]):
+         )
+         return list(result.scalars().all())
+ 
+-    async def get_availability_by_id(
+-        self, slot_id: int
+-    ) -> Optional[ProviderAvailability]:
+-
++    async def get_availability_by_id(self, slot_id: int) -> Optional[ProviderAvailability]:
+         result = await self.db.execute(
+             select(ProviderAvailability).where(ProviderAvailability.id == slot_id)
+         )
+         return result.scalar_one_or_none()
+ 
+-    async def get_all_availabilities(
+-        self, provider_id: int
+-    ) -> List[ProviderAvailability]:
++    async def get_all_availabilities(self, provider_id: int) -> list[ProviderAvailability]:
+         result = await self.db.execute(
+             select(ProviderAvailability)
+             .where(ProviderAvailability.provider_id == provider_id)
+@@ -117,7 +97,7 @@ class ProviderRepository(BaseRepository[Provider]):
+         )
+         return list(result.scalars().all())
+ 
+-    async def update_availability(
++    async def add_availability(
+         self, avail: ProviderAvailability
+     ) -> ProviderAvailability:
+         self.db.add(avail)
+@@ -125,8 +105,12 @@ class ProviderRepository(BaseRepository[Provider]):
+         await self.db.refresh(avail)
+         return avail
+ 
++    async def update_availability(self, avail: ProviderAvailability) -> ProviderAvailability:
++        self.db.add(avail)
++        await self.db.flush()
++        await self.db.refresh(avail)
++        return avail
++
+     async def delete_availability(self, avail: ProviderAvailability) -> None:
+         await self.db.delete(avail)
+         await self.db.flush()
+-
+-
+diff --git a/swiftcare-core/app/schemas/auth.py b/swiftcare-core/app/schemas/auth.py
+index 68d1da2..8eaca0b 100644
+--- a/swiftcare-core/app/schemas/auth.py
++++ b/swiftcare-core/app/schemas/auth.py
+@@ -6,6 +6,7 @@ class RegisterRequest(BaseModel):
+     email: EmailStr
+     password: str = Field(min_length=8, max_length=128)
+     full_name: str = Field(min_length=1, max_length=100)
++    role: UserRole = UserRole.PATIENT
+ 
+     @field_validator("full_name")
+     @classmethod
+@@ -31,6 +32,20 @@ class RefreshRequest(BaseModel):
+     refresh_token: str
+ 
+ 
++class ForgotPasswordRequest(BaseModel):
++    email: EmailStr
++
++
++class ResetPasswordRequest(BaseModel):
++    token: str
++    new_password: str = Field(min_length=8, max_length=128)
++
++
++class ChangePasswordRequest(BaseModel):
++    current_password: str
++    new_password: str = Field(min_length=8, max_length=128)
++
++
+ class UserRead(BaseModel):
+     id: int
+     email: str
+diff --git a/swiftcare-core/app/schemas/patient.py b/swiftcare-core/app/schemas/patient.py
+index 8a0557f..7d57f48 100644
+--- a/swiftcare-core/app/schemas/patient.py
++++ b/swiftcare-core/app/schemas/patient.py
+@@ -1,4 +1,4 @@
+-from datetime import date
++from datetime import date, datetime
+ from typing import Optional
+ from pydantic import BaseModel, field_validator
+ 
+@@ -31,9 +31,6 @@ class PatientUpdate(BaseModel):
+     address: Optional[str] = None
+ 
+ 
+-from datetime import datetime
+-
+-
+ class AppointmentSummary(BaseModel):
+     id: int
+     provider_id: int
+@@ -61,4 +58,3 @@ class PatientRead(BaseModel):
+     appointments: Optional[list[AppointmentSummary]] = None
+ 
+     model_config = {"from_attributes": True}
+-
+diff --git a/swiftcare-core/app/schemas/prescription.py b/swiftcare-core/app/schemas/prescription.py
+index 08f2a75..5f9d364 100644
+--- a/swiftcare-core/app/schemas/prescription.py
++++ b/swiftcare-core/app/schemas/prescription.py
+@@ -64,17 +64,16 @@ class PrescriptionRead(BaseModel):
+     model_config = {"from_attributes": True}
+ 
+ 
+-class AllergyCreate(BaseModel):
+-    patient_id: int
++class AllergyBody(BaseModel):
++    """Request body for nested /patients/{patient_id}/allergies — patient_id comes from URL."""
+     allergen: str = Field(min_length=1, max_length=100)
+     allergy_type: AllergyType
+     severity: AllergySeverity
+     reaction: Optional[str] = Field(default=None, max_length=500)
+-    recorded_by_id: Optional[int] = None
+ 
+ 
+-class AllergyBody(BaseModel):
+-    """Request body for nested /patients/{patient_id}/allergies — patient_id comes from URL."""
++class AllergyCreate(BaseModel):
++    patient_id: int
+     allergen: str = Field(min_length=1, max_length=100)
+     allergy_type: AllergyType
+     severity: AllergySeverity
+diff --git a/swiftcare-core/app/schemas/provider.py b/swiftcare-core/app/schemas/provider.py
+index f9aed7a..0a63703 100644
+--- a/swiftcare-core/app/schemas/provider.py
++++ b/swiftcare-core/app/schemas/provider.py
+@@ -1,16 +1,45 @@
+ from decimal import Decimal
+ from typing import Optional
+-from pydantic import BaseModel, Field, field_serializer, field_validator
++from pydantic import BaseModel, EmailStr, Field, field_serializer, field_validator
+ 
+ 
+-
+-
+-class ProviderCreate(BaseModel):
++class ProviderOnboard(BaseModel):
++    email: EmailStr
++    password: str = Field(min_length=8, max_length=128)
++    full_name: str = Field(min_length=1, max_length=100)
+     specialization: str = Field(..., max_length=100, json_schema_extra={"example": "Cardiology"})
+     license_number: str = Field(..., max_length=50, json_schema_extra={"example": "MED-CARD-99182"})
+     consultation_fee: Decimal = Field(..., max_digits=10, decimal_places=2, json_schema_extra={"example": 500.00})
+     default_slot_minutes: int = Field(default=30, json_schema_extra={"example": 30})
+-    user_id: Optional[int] = Field(default=None, json_schema_extra={"example": 42})
++
++    @field_validator("full_name")
++    @classmethod
++    def full_name_not_blank(cls, v: str) -> str:
++        v = v.strip()
++        if not v:
++            raise ValueError("full_name cannot be blank")
++        return v
++
++    @field_validator("consultation_fee")
++    @classmethod
++    def fee_positive(cls, v: Decimal) -> Decimal:
++        if v <= 0:
++            raise ValueError("Fee must be positive")
++        return v
++
++    @field_validator("default_slot_minutes")
++    @classmethod
++    def slot_valid(cls, v: int) -> int:
++        if v not in (15, 20, 30, 45, 60):
++            raise ValueError("Slot must be 15/20/30/45/60 minutes")
++        return v
++
++
++class ProviderCreate(BaseModel):
++    specialization: str
++    license_number: str
++    consultation_fee: Decimal
++    default_slot_minutes: int = 30
+ 
+     @field_validator("consultation_fee")
+     @classmethod
+@@ -29,50 +58,21 @@ class ProviderCreate(BaseModel):
+ 
+ class ProviderUpdate(BaseModel):
+     specialization: Optional[str] = None
+-    consultation_fee: Optional[Decimal] = Field(default=None, max_digits=10, decimal_places=2)
++    consultation_fee: Optional[Decimal] = None
+     default_slot_minutes: Optional[int] = None
+ 
+ 
+ class ProviderRead(BaseModel):
+-    id: int = Field(..., json_schema_extra={"example": 1})
+-    user_id: int = Field(..., json_schema_extra={"example": 5})
+-    specialization: str = Field(..., json_schema_extra={"example": "Cardiology"})
+-    license_number: str = Field(..., json_schema_extra={"example": "MED-CARD-99182"})
+-    consultation_fee: Decimal = Field(..., max_digits=10, decimal_places=2, json_schema_extra={"example": 500.00})
+-    default_slot_minutes: int = Field(..., json_schema_extra={"example": 30})
+-    full_name: str = Field(..., json_schema_extra={"example": "Dr. Anjali Mehta"})
+-    email: str = Field(..., json_schema_extra={"example": "dr.anjali@swiftcare.io"})
+-    availabilities: Optional[list["ProviderAvailabilityRead"]] = None
+-
+-    @field_serializer("consultation_fee")
+-    def serialize_consultation_fee(self, v: Decimal) -> str:
+-        return f"{v:.2f}"
+-
+-    model_config = {
+-        "from_attributes": True,
+-        "json_schema_extra": {
+-            "example": {
+-                "id": 1,    
+-                "user_id": 5,
+-                "specialization": "Cardiology",
+-                "license_number": "MED-CARD-99182",
+-                "consultation_fee": 500.00,
+-                "default_slot_minutes": 30,
+-                "full_name": "Dr. Anjali Mehta",
+-                "email": "dr.anjali@swiftcare.io",
+-                "availabilities": [
+-                    {
+-                        "id": 1,
+-                        "weekday": 0,
+-                        "start_time": "09:00:00",
+-                        "end_time": "17:00:00"
+-                    }
+-                ]
+-            }
+-        }
+-    }
+-
++    id: int
++    user_id: int
++    specialization: str
++    license_number: str
++    consultation_fee: Decimal
++    default_slot_minutes: int
++    full_name: str
++    email: str
+ 
++    model_config = {"from_attributes": True}
+ 
+ 
+ class ProviderAvailabilityCreate(BaseModel):
+@@ -97,24 +97,17 @@ class ProviderAvailabilityCreate(BaseModel):
+ 
+ 
+ class ProviderAvailabilityUpdate(BaseModel):
+-    weekday: Optional[int] = None
+     start_time: Optional[str] = None
+     end_time: Optional[str] = None
+ 
+-    @field_validator("weekday")
+-    @classmethod
+-    def weekday_valid(cls, v: Optional[int]) -> Optional[int]:
+-        if v is not None and v not in range(7):
+-            raise ValueError("Weekday must be between 0 and 6")
+-        return v
+-
+-    @field_validator("start_time", "end_time")
++    @field_validator("start_time", "end_time", mode="before")
+     @classmethod
+-    def time_format(cls, v: Optional[str]) -> Optional[str]:
+-        if v is not None:
+-            import re
+-            if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", v):
+-                raise ValueError("Time must be in HH:MM format (00:00–23:59)")
++    def time_format(cls, v: str | None) -> str | None:
++        if v is None:
++            return v
++        import re
++        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", v):
++            raise ValueError("Time must be in HH:MM format (00:00–23:59)")
+         return v
+ 
+ 
+@@ -125,4 +118,3 @@ class ProviderAvailabilityRead(BaseModel):
+     end_time: str
+ 
+     model_config = {"from_attributes": True}
+-
+diff --git a/swiftcare-core/app/services/auth.py b/swiftcare-core/app/services/auth.py
+index 8c996df..229dd14 100644
+--- a/swiftcare-core/app/services/auth.py
++++ b/swiftcare-core/app/services/auth.py
+@@ -1,4 +1,5 @@
+ from datetime import timedelta
++from uuid import uuid4
+ from fastapi import HTTPException, status
+ from sqlalchemy import select
+ from sqlalchemy.ext.asyncio import AsyncSession
+@@ -12,10 +13,11 @@ from app.core.security import (
+     verify_password,
+ )
+ from app.models.enums import UserRole
++from app.models.password_reset_token import PasswordResetToken
+ from app.models.refresh_token import RefreshToken
+ from app.models.user import User
+ from app.repositories.user import UserRepository
+-from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse
++from app.schemas.auth import ChangePasswordRequest, ForgotPasswordRequest, LoginRequest, RegisterRequest, ResetPasswordRequest, TokenResponse
+ from app.utils.time import utcnow
+ 
+ 
+@@ -81,3 +83,61 @@ class AuthService:
+         if rt:
+             rt.revoked = True
+             await self.db.commit()
++
++    async def forgot_password(self, data: ForgotPasswordRequest) -> None:
++        import hashlib, secrets
++        from app.events.publisher import publish
++        from swiftcare_contracts.events import PasswordResetRequestedEvent
++
++        user = await self.repo.get_by_email(data.email)
++        if not user:
++            return  # silent — don't leak whether email exists
++
++        raw = secrets.token_urlsafe(32)
++        token_hash = hashlib.sha256(raw.encode()).hexdigest()
++
++        prt = PasswordResetToken(
++            user_id=user.id,
++            token_hash=token_hash,
++            expires_at=utcnow() + timedelta(hours=1),
++        )
++        self.db.add(prt)
++        await self.db.commit()
++
++        # best-effort — token already saved; if Redis is down the email just won't send
++        try:
++            await publish(PasswordResetRequestedEvent(
++                event_id=uuid4(),
++                user_email=user.email,
++                user_name=user.full_name,
++                reset_token=raw,
++            ))
++        except Exception:
++            import logging
++            logging.getLogger(__name__).warning(
++                "Redis unavailable — password reset email not queued for %s", user.email
++            )
++
++    async def change_password(self, user: User, data: ChangePasswordRequest) -> None:
++        if not verify_password(data.current_password, user.hashed_password):
++            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
++        user.hashed_password = hash_password(data.new_password)
++        await self.db.commit()
++
++    async def reset_password(self, data: ResetPasswordRequest) -> None:
++        import hashlib
++        token_hash = hashlib.sha256(data.token.encode()).hexdigest()
++
++        result = await self.db.execute(
++            select(PasswordResetToken).where(PasswordResetToken.token_hash == token_hash)
++        )
++        prt = result.scalar_one_or_none()
++
++        if not prt or prt.used or prt.expires_at < utcnow():
++            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired reset token")
++
++        user_result = await self.db.execute(select(User).where(User.id == prt.user_id))
++        user = user_result.scalar_one()
++        user.hashed_password = hash_password(data.new_password)
++        prt.used = True
++        await self.db.commit()
+diff --git a/swiftcare-core/app/services/prescription.py b/swiftcare-core/app/services/prescription.py
+index 67b5a68..62662d4 100644
+--- a/swiftcare-core/app/services/prescription.py
++++ b/swiftcare-core/app/services/prescription.py
+@@ -1,11 +1,28 @@
++from datetime import timezone, datetime
+ from typing import Optional
++from uuid import uuid4
+ from fastapi import HTTPException, status
++from sqlalchemy import select
+ from sqlalchemy.ext.asyncio import AsyncSession
+-
++from sqlalchemy.orm import joinedload
++
++try:
++    from swiftcare_contracts.events import PrescriptionCreatedEvent
++except ModuleNotFoundError:
++    import sys
++    from pathlib import Path
++    contracts_dir = str(Path(__file__).resolve().parents[3])
++    if contracts_dir not in sys.path:
++        sys.path.append(contracts_dir)
++    from swiftcare_contracts.events import PrescriptionCreatedEvent
++
++from app.events.publisher import publish
+ from app.models.allergy import Allergy
+ from app.models.appointment import Appointment
+ from app.models.enums import AppointmentStatus, PrescriptionStatus
++from app.models.patient import Patient
+ from app.models.prescription import Prescription, PrescriptionItem
++from app.models.provider import Provider
+ from app.models.user import User
+ from app.repositories.appointment import AppointmentRepository
+ from app.repositories.prescription import AllergyRepository, PrescriptionRepository
+@@ -57,28 +74,43 @@ class PrescriptionService:
+             ))
+ 
+         await self.db.commit()
++
++        patient_row = (await self.db.execute(
++            select(Patient).options(joinedload(Patient.user)).where(Patient.id == data.patient_id)
++        )).scalar_one()
++        provider_row = (await self.db.execute(
++            select(Provider).options(joinedload(Provider.user)).where(Provider.id == provider_id)
++        )).scalar_one()
++        await publish(PrescriptionCreatedEvent(
++            event_id=uuid4(),
++            prescription_id=rx.id,
++            patient_id=data.patient_id,
++            provider_id=provider_id,
++            created_at=datetime.now(timezone.utc),
++            patient_name=patient_row.user.full_name,
++            patient_email=patient_row.user.email,
++            provider_name=provider_row.user.full_name,
++            drug_names=[item.drug_name for item in data.items],
++        ))
++
+         return await self.repo.get_by_id(rx.id)
+ 
+     async def get(self, rx_id: int, current_user: User) -> Prescription:
+         rx = await self.repo.get_by_id(rx_id)
+         if not rx:
+             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prescription not found")
+-
+         if current_user.role == "admin":
+             return rx
+-
+         if current_user.role == "patient":
+             from app.repositories.patient import PatientRepository
+             patient = await PatientRepository(self.db).get_by_user_id(current_user.id)
+             if not patient or rx.patient_id != patient.id:
+                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+-
+         elif current_user.role == "provider":
+             from app.repositories.provider import ProviderRepository
+             provider = await ProviderRepository(self.db).get_by_user_id(current_user.id)
+             if not provider or rx.provider_id != provider.id:
+                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+-
+         return rx
+ 
+     async def list_all(
+@@ -93,7 +125,6 @@ class PrescriptionService:
+     ) -> list[Prescription]:
+         forced_patient_id = patient_id
+         forced_provider_id = provider_id
+-
+         if current_user.role == "patient":
+             from app.repositories.patient import PatientRepository
+             patient = await PatientRepository(self.db).get_by_user_id(current_user.id)
+@@ -106,7 +137,6 @@ class PrescriptionService:
+             if not provider:
+                 return []
+             forced_provider_id = provider.id
+-
+         return await self.repo.list_all(
+             patient_id=forced_patient_id,
+             provider_id=forced_provider_id,
+diff --git a/swiftcare-core/app/services/provider.py b/swiftcare-core/app/services/provider.py
+index 05535f9..5821fc9 100644
+--- a/swiftcare-core/app/services/provider.py
++++ b/swiftcare-core/app/services/provider.py
+@@ -10,24 +10,13 @@ from app.schemas.provider import (
+     ProviderAvailabilityCreate,
+     ProviderAvailabilityRead,
+     ProviderCreate,
++    ProviderOnboard,
+     ProviderRead,
+     ProviderUpdate,
+ )
+ 
+ 
+ def _to_read(provider: Provider) -> ProviderRead:
+-    avails = []
+-    if hasattr(provider, "availability") and provider.availability:
+-        avails = [
+-            ProviderAvailabilityRead(
+-                id=a.id,
+-                weekday=a.weekday,
+-                start_time=str(a.start_time),
+-                end_time=str(a.end_time),
+-            )
+-            for a in provider.availability
+-        ]
+-
+     return ProviderRead(
+         id=provider.id,
+         user_id=provider.user_id,
+@@ -37,7 +26,6 @@ def _to_read(provider: Provider) -> ProviderRead:
+         default_slot_minutes=provider.default_slot_minutes,
+         full_name=provider.user.full_name,
+         email=provider.user.email,
+-        availabilities=avails,
+     )
+ 
+ 
+@@ -46,26 +34,44 @@ class ProviderService:
+         self.db = db
+         self.repo = ProviderRepository(db)
+ 
+-    async def create(
+-        self, data: ProviderCreate, current_user: User
+-    ) -> ProviderRead:
+-        target_user_id = current_user.id
++    async def onboard(self, data: ProviderOnboard) -> ProviderRead:
++        from app.core.security import hash_password
++        from app.models.enums import UserRole
++        from app.repositories.user import UserRepository
+ 
+-        if current_user.role == "admin" and data.user_id:
+-            target_user_id = data.user_id
+-            from app.repositories.user import UserRepository
+-            user_repo = UserRepository(self.db)
+-            target_user = await user_repo.get_by_id(target_user_id)
+-            if not target_user:
+-                raise HTTPException(status_code=404, detail="Target user not found")
+-            if target_user.role != "provider":
+-                raise HTTPException(
+-                    status_code=status.HTTP_400_BAD_REQUEST,
+-                    detail="Target user must have role 'provider'",
+-                )
++        user_repo = UserRepository(self.db)
++        if await user_repo.get_by_email(data.email):
++            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
+ 
++        user = User(
++            email=data.email,
++            hashed_password=hash_password(data.password),
++            full_name=data.full_name,
++            role=UserRole.PROVIDER.value,
++        )
++        user = await user_repo.create(user)
++        await self.db.flush()
+ 
+-        existing = await self.repo.get_by_user_id(target_user_id)
++        existing = await self.repo.get_by_user_id(user.id)
++        if existing:
++            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Provider profile already exists")
++
++        provider = Provider(
++            user_id=user.id,
++            specialization=data.specialization,
++            license_number=data.license_number,
++            consultation_fee=data.consultation_fee,
++            default_slot_minutes=data.default_slot_minutes,
++        )
++        provider = await self.repo.create(provider)
++        await self.db.commit()
++        provider = await self.repo.get_by_id_with_user(provider.id)
++        return _to_read(provider)
++
++    async def create(
++        self, data: ProviderCreate, current_user: User
++    ) -> ProviderRead:
++        existing = await self.repo.get_by_user_id(current_user.id)
+         if existing:
+             raise HTTPException(
+                 status_code=status.HTTP_409_CONFLICT,
+@@ -73,14 +79,13 @@ class ProviderService:
+             )
+ 
+         provider = Provider(
+-            user_id=target_user_id,
++            user_id=current_user.id,
+             specialization=data.specialization,
+             license_number=data.license_number,
+             consultation_fee=data.consultation_fee,
+             default_slot_minutes=data.default_slot_minutes,
+         )
+         provider = await self.repo.create(provider)
+-
+         await self.db.commit()
+         provider = await self.repo.get_by_id_with_user(provider.id)
+         return _to_read(provider)
+@@ -97,16 +102,12 @@ class ProviderService:
+             raise HTTPException(status_code=404, detail="Provider profile not found for this user")
+         return _to_read(provider)
+ 
+-    async def update(
+-        self, provider_id: int, data: ProviderUpdate, current_user: User
+-    ) -> ProviderRead:
++    async def update(self, provider_id: int, data: ProviderUpdate, current_user: User) -> ProviderRead:
+         provider = await self.repo.get_by_id_with_user(provider_id)
+         if not provider:
+             raise HTTPException(status_code=404, detail="Provider not found")
+-
+         if current_user.role != "admin" and provider.user_id != current_user.id:
+             raise HTTPException(status_code=403, detail="Access denied")
+-
+         if data.specialization is not None:
+             provider.specialization = data.specialization
+         if data.consultation_fee is not None:
+@@ -117,99 +118,25 @@ class ProviderService:
+             if data.default_slot_minutes not in (15, 20, 30, 45, 60):
+                 raise HTTPException(status_code=400, detail="Slot must be 15/20/30/45/60 minutes")
+             provider.default_slot_minutes = data.default_slot_minutes
+-
+         await self.db.commit()
+         provider = await self.repo.get_by_id_with_user(provider_id)
+         return _to_read(provider)
+ 
+-    async def list_all(
+-        self, page: int, size: int, specialization: str | None = None
+-    ) -> PaginatedResponse[ProviderRead]:
+-        if specialization:
+-            providers = await self.repo.get_by_specialization(
+-                specialization, page, size
+-            )
+-            total = await self.repo.count(
+-                Provider.specialization.ilike(f"%{specialization}%")
+-            )
+-        else:
+-            providers = await self.repo.list_all(page, size)
+-            total = await self.repo.count()
+-
+-        pages = -(-total // size) if size > 0 else 0
+-        return PaginatedResponse(
+-            items=[_to_read(p) for p in providers],
+-            total=total,
+-            page=page,
+-            size=size,
+-            pages=pages,
+-        )
+-
+-    async def add_availability(
+-        self, provider_id: int, data: ProviderAvailabilityCreate, current_user: User
+-    ) -> ProviderAvailabilityRead:
+-        provider = await self.repo.get_by_id_with_user(provider_id)
+-        if not provider:
+-            raise HTTPException(status_code=404, detail="Provider not found")
+-
+-        # Provider can only add availability for their own profile, unless admin
+-        if provider.user_id != current_user.id and current_user.role != "admin":
+-            raise HTTPException(status_code=403, detail="Access denied")
+-
+-        start = time.fromisoformat(data.start_time)
+-        end = time.fromisoformat(data.end_time)
+-        if end <= start:
+-            raise HTTPException(
+-                status_code=status.HTTP_400_BAD_REQUEST,
+-                detail="end_time must be after start_time",
+-            )
+-
+-        existing_shifts = await self.repo.get_availabilities_by_weekday(provider_id, data.weekday)
+-        for slot in existing_shifts:
+-            if max(start, slot.start_time) < min(end, slot.end_time):
+-                raise HTTPException(
+-                    status_code=status.HTTP_409_CONFLICT,
+-                    detail=f"Availability slot ({data.start_time} - {data.end_time}) overlaps with existing slot ({slot.start_time} - {slot.end_time})",
+-                )
+-
+-
+-        avail = ProviderAvailability(
+-            provider_id=provider_id,
+-            weekday=data.weekday,
+-            start_time=start,
+-            end_time=end,
+-        )
+-        avail = await self.repo.add_availability(avail)
+-        await self.db.commit()
+-
+-        return ProviderAvailabilityRead(
+-            id=avail.id,
+-            weekday=avail.weekday,
+-            start_time=str(avail.start_time),
+-            end_time=str(avail.end_time),
+-        )
+-
+     async def add_availabilities_bulk(
+         self, provider_id: int, data_list: list[ProviderAvailabilityCreate], current_user: User
+     ) -> list[ProviderAvailabilityRead]:
+         provider = await self.repo.get_by_id_with_user(provider_id)
+         if not provider:
+             raise HTTPException(status_code=404, detail="Provider not found")
+-
+         if provider.user_id != current_user.id and current_user.role != "admin":
+             raise HTTPException(status_code=403, detail="Access denied")
+ 
+-        created_avails: list[ProviderAvailability] = []
+-
+         parsed_items = []
+         for idx, item in enumerate(data_list):
+             start = time.fromisoformat(item.start_time)
+             end = time.fromisoformat(item.end_time)
+             if end <= start:
+-                raise HTTPException(
+-                    status_code=status.HTTP_400_BAD_REQUEST,
+-                    detail=f"Item {idx}: end_time must be after start_time",
+-                )
++                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Item {idx}: end_time must be after start_time")
+             parsed_items.append((item, start, end))
+ 
+         for i in range(len(parsed_items)):
+@@ -217,125 +144,133 @@ class ProviderService:
+             for j in range(i + 1, len(parsed_items)):
+                 item2, s2, e2 = parsed_items[j]
+                 if item1.weekday == item2.weekday and max(s1, s2) < min(e1, e2):
+-                    raise HTTPException(
+-                        status_code=status.HTTP_409_CONFLICT,
+-                        detail=f"Batch payload contains overlapping slots on weekday {item1.weekday} ({item1.start_time}-{item1.end_time} and {item2.start_time}-{item2.end_time})",
+-                    )
++                    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Batch payload contains overlapping slots")
+ 
++        created: list[ProviderAvailability] = []
+         for item, start, end in parsed_items:
+-            existing_shifts = await self.repo.get_availabilities_by_weekday(provider_id, item.weekday)
+-            for slot in existing_shifts:
++            existing = await self.repo.get_availabilities_by_weekday(provider_id, item.weekday)
++            for slot in existing:
+                 if max(start, slot.start_time) < min(end, slot.end_time):
+-                    raise HTTPException(
+-                        status_code=status.HTTP_409_CONFLICT,
+-                        detail=f"Availability slot ({item.start_time} - {item.end_time}) overlaps with existing slot ({slot.start_time} - {slot.end_time})",
+-                    )
+-            avail = ProviderAvailability(
+-                provider_id=provider_id,
+-                weekday=item.weekday,
+-                start_time=start,
+-                end_time=end,
+-            )
++                    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Slot overlaps with existing ({slot.start_time} - {slot.end_time})")
++            avail = ProviderAvailability(provider_id=provider_id, weekday=item.weekday, start_time=start, end_time=end)
+             avail = await self.repo.add_availability(avail)
+-            created_avails.append(avail)
++            created.append(avail)
+ 
+         await self.db.commit()
++        return [ProviderAvailabilityRead(id=a.id, weekday=a.weekday, start_time=str(a.start_time), end_time=str(a.end_time)) for a in created]
+ 
+-        return [
+-            ProviderAvailabilityRead(
+-                id=a.id,
+-                weekday=a.weekday,
+-                start_time=str(a.start_time),
+-                end_time=str(a.end_time),
+-            )
+-            for a in created_avails
+-        ]
+-
+-
+-    async def list_availabilities(
+-        self, provider_id: int
+-    ) -> list[ProviderAvailabilityRead]:
++    async def list_availabilities(self, provider_id: int) -> list[ProviderAvailabilityRead]:
+         provider = await self.repo.get_by_id_with_user(provider_id)
+         if not provider:
+             raise HTTPException(status_code=404, detail="Provider not found")
+-
+         availabilities = await self.repo.get_all_availabilities(provider_id)
+         return [
+-            ProviderAvailabilityRead(
+-                id=a.id,
+-                weekday=a.weekday,
+-                start_time=str(a.start_time),
+-                end_time=str(a.end_time),
+-            )
++            ProviderAvailabilityRead(id=a.id, weekday=a.weekday, start_time=str(a.start_time), end_time=str(a.end_time))
+             for a in availabilities
+         ]
+ 
+     async def update_availability(
+-        self,
+-        provider_id: int,
+-        slot_id: int,
+-        data: ProviderAvailabilityUpdate,
+-        current_user: User,
++        self, provider_id: int, slot_id: int, data: "ProviderAvailabilityUpdate", current_user: User
+     ) -> ProviderAvailabilityRead:
++        from app.schemas.provider import ProviderAvailabilityUpdate
+         provider = await self.repo.get_by_id_with_user(provider_id)
+         if not provider:
+             raise HTTPException(status_code=404, detail="Provider not found")
+-
+         if provider.user_id != current_user.id and current_user.role != "admin":
+             raise HTTPException(status_code=403, detail="Access denied")
+-
+         slot = await self.repo.get_availability_by_id(slot_id)
+         if not slot or slot.provider_id != provider_id:
+             raise HTTPException(status_code=404, detail="Availability slot not found")
+-
+-        new_weekday = data.weekday if data.weekday is not None else slot.weekday
+         new_start = time.fromisoformat(data.start_time) if data.start_time is not None else slot.start_time
+         new_end = time.fromisoformat(data.end_time) if data.end_time is not None else slot.end_time
+-
+         if new_end <= new_start:
+-            raise HTTPException(
+-                status_code=status.HTTP_400_BAD_REQUEST,
+-                detail="end_time must be after start_time",
+-            )
+-
+-        existing_shifts = await self.repo.get_availabilities_by_weekday(provider_id, new_weekday)
+-        for existing in existing_shifts:
+-            if existing.id == slot_id:
++            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="end_time must be after start_time")
++        existing = await self.repo.get_availabilities_by_weekday(provider_id, slot.weekday)
++        for s in existing:
++            if s.id == slot_id:
+                 continue
+-            if max(new_start, existing.start_time) < min(new_end, existing.end_time):
+-                raise HTTPException(
+-                    status_code=status.HTTP_409_CONFLICT,
+-                    detail=f"Updated availability slot overlaps with existing slot ({existing.start_time} - {existing.end_time})",
+-                )
+-
+-        slot.weekday = new_weekday
++            if max(new_start, s.start_time) < min(new_end, s.end_time):
++                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Updated slot overlaps with existing slot")
+         slot.start_time = new_start
+         slot.end_time = new_end
+-
+         slot = await self.repo.update_availability(slot)
+         await self.db.commit()
++        return ProviderAvailabilityRead(id=slot.id, weekday=slot.weekday, start_time=str(slot.start_time), end_time=str(slot.end_time))
+ 
+-        return ProviderAvailabilityRead(
+-            id=slot.id,
+-            weekday=slot.weekday,
+-            start_time=str(slot.start_time),
+-            end_time=str(slot.end_time),
++    async def delete_availability(self, provider_id: int, slot_id: int, current_user: User) -> None:
++        provider = await self.repo.get_by_id_with_user(provider_id)
++        if not provider:
++            raise HTTPException(status_code=404, detail="Provider not found")
++        if provider.user_id != current_user.id and current_user.role != "admin":
++            raise HTTPException(status_code=403, detail="Access denied")
++        slot = await self.repo.get_availability_by_id(slot_id)
++        if not slot or slot.provider_id != provider_id:
++            raise HTTPException(status_code=404, detail="Availability slot not found")
++        await self.repo.delete_availability(slot)
++        await self.db.commit()
++
++    async def list_all(
++        self, page: int, size: int, specialization: str | None = None
++    ) -> PaginatedResponse[ProviderRead]:
++        if specialization:
++            providers = await self.repo.get_by_specialization(
++                specialization, page, size
++            )
++            total = await self.repo.count(
++                Provider.specialization.ilike(f"%{specialization}%")
++            )
++        else:
++            providers = await self.repo.list_all(page, size)
++            total = await self.repo.count()
++
++        pages = -(-total // size) if size > 0 else 0
++        return PaginatedResponse(
++            items=[_to_read(p) for p in providers],
++            total=total,
++            page=page,
++            size=size,
++            pages=pages,
+         )
+ 
+-    async def delete_availability(
+-        self, provider_id: int, slot_id: int, current_user: User
+-    ) -> None:
++    async def add_availability(
++        self, provider_id: int, data: ProviderAvailabilityCreate, current_user: User
++    ) -> ProviderAvailabilityRead:
+         provider = await self.repo.get_by_id_with_user(provider_id)
+         if not provider:
+             raise HTTPException(status_code=404, detail="Provider not found")
+ 
++        # Provider can only add availability for their own profile, unless admin
+         if provider.user_id != current_user.id and current_user.role != "admin":
+             raise HTTPException(status_code=403, detail="Access denied")
+ 
+-        slot = await self.repo.get_availability_by_id(slot_id)
+-        if not slot or slot.provider_id != provider_id:
+-            raise HTTPException(status_code=404, detail="Availability slot not found")
++        start = time.fromisoformat(data.start_time)
++        end = time.fromisoformat(data.end_time)
++        if end <= start:
++            raise HTTPException(
++                status_code=status.HTTP_400_BAD_REQUEST,
++                detail="end_time must be after start_time",
++            )
+ 
+-        await self.repo.delete_availability(slot)
++        existing = await self.repo.get_availabilities_by_weekday(provider_id, data.weekday)
++        for slot in existing:
++            if max(start, slot.start_time) < min(end, slot.end_time):
++                raise HTTPException(
++                    status_code=status.HTTP_409_CONFLICT,
++                    detail=f"Availability slot overlaps with existing slot ({slot.start_time} - {slot.end_time})",
++                )
++
++        avail = ProviderAvailability(
++            provider_id=provider_id,
++            weekday=data.weekday,
++            start_time=start,
++            end_time=end,
++        )
++        avail = await self.repo.add_availability(avail)
+         await self.db.commit()
+ 
++        return ProviderAvailabilityRead(
++            id=avail.id,
++            weekday=avail.weekday,
++            start_time=str(avail.start_time),
++            end_time=str(avail.end_time),
++        )
+diff --git a/swiftcare-core/tests/conftest.py b/swiftcare-core/tests/conftest.py
+index 1a8c6bd..d2ba73b 100644
+--- a/swiftcare-core/tests/conftest.py
++++ b/swiftcare-core/tests/conftest.py
+@@ -1,13 +1,3 @@
+-import sys
+-from pathlib import Path
+-
+-# Add swiftcare-contracts to sys.path
+-contracts_dir = str(Path(__file__).resolve().parents[2] / "swiftcare-contracts")
+-if contracts_dir not in sys.path:
+-    sys.path.insert(0, contracts_dir)
+-
+-from sqlalchemy import update
+-
+ import pytest
+ import pytest_asyncio
+ from collections import defaultdict
+@@ -16,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
+ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+ from sqlalchemy.pool import StaticPool
+ 
+-
+ import app.models  # Register all ORM models on Base.metadata
+ from app.db.base import Base
+ from app.db.session import get_db
+@@ -101,33 +90,34 @@ async def client():
+ # ── Shared scenario helpers ────────────────────────────────────────────
+ 
+ async def _register_login(client: AsyncClient, email: str, role: str, full_name: str) -> dict:
+-    """Register a user (always PATIENT) then patch role in DB if needed."""
+-    from app.models.user import User as UserModel
++    from sqlalchemy import update
++    from app.models.user import User
+     res = await client.post("/api/v1/auth/register", json={
+         "email": email, "password": "Password123!", "full_name": full_name,
+     })
+     assert res.status_code == 201, res.text
+-    token = res.json()["access_token"]
+-
+     if role != "patient":
+         async with TestingSessionLocal() as session:
+-            await session.execute(
+-                update(UserModel).where(UserModel.email == email).values(role=role)
+-            )
++            await session.execute(update(User).where(User.email == email).values(role=role))
+             await session.commit()
+-
+-    return {"Authorization": f"Bearer {token}"}
++    login = await client.post("/api/v1/auth/login", json={"email": email, "password": "Password123!"})
++    return {"Authorization": f"Bearer {login.json()['access_token']}"}
+ 
+ 
+ @pytest_asyncio.fixture
+ async def provider_data(client: AsyncClient):
+-    headers = await _register_login(client, "dr.test@swiftcare.io", "provider", "Dr Test")
++    admin_headers = await _register_login(client, "admin.fixture@swiftcare.io", "admin", "Admin User")
+     res = await client.post("/api/v1/providers", json={
++        "email": "dr.test@swiftcare.io", "password": "Password123!", "full_name": "Dr Test",
+         "specialization": "General", "license_number": "LIC-001",
+         "consultation_fee": "100.00", "default_slot_minutes": 30,
+-    }, headers=headers)
++    }, headers=admin_headers)
+     assert res.status_code == 201, res.text
+-    return {"headers": headers, "provider_id": res.json()["id"]}
++    provider_id = res.json()["id"]
++    login = await client.post("/api/v1/auth/login", json={"email": "dr.test@swiftcare.io", "password": "Password123!"})
++    assert login.status_code == 200, login.text
++    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
++    return {"headers": headers, "provider_id": provider_id}
+ 
+ 
+ @pytest_asyncio.fixture
+diff --git a/swiftcare-core/tests/test_auth.py b/swiftcare-core/tests/test_auth.py
+index 6b43863..6ac0a45 100644
+--- a/swiftcare-core/tests/test_auth.py
++++ b/swiftcare-core/tests/test_auth.py
+@@ -9,6 +9,7 @@ async def test_register_user_success(client: AsyncClient):
+         "email": "dr.sharma@swiftcare.io",
+         "password": "SecretPassword123!",
+         "full_name": "Dr Sharma",
++        "role": "provider"
+     }
+     response = await client.post("/api/v1/auth/register", json=payload)
+     assert response.status_code == 201
+@@ -17,29 +18,13 @@ async def test_register_user_success(client: AsyncClient):
+     assert data["token_type"] == "bearer"
+ 
+ 
+-@pytest.mark.asyncio
+-async def test_register_always_creates_patient_role(client: AsyncClient):
+-    """Security: even if client sends role=admin, registration always creates PATIENT."""
+-    payload = {
+-        "email": "sneaky@swiftcare.io",
+-        "password": "SecretPassword123!",
+-        "full_name": "Sneaky User",
+-        "role": "admin",  # extra field — must be ignored
+-    }
+-    res = await client.post("/api/v1/auth/register", json=payload)
+-    assert res.status_code == 201
+-
+-    token = res.json()["access_token"]
+-    me = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+-    assert me.json()["role"] == "patient"
+-
+-
+ @pytest.mark.asyncio
+ async def test_register_duplicate_email_fails(client: AsyncClient):
+     payload = {
+         "email": "patient.doe@swiftcare.io",
+         "password": "SecretPassword123!",
+         "full_name": "John Doe",
++        "role": "patient"
+     }
+     res1 = await client.post("/api/v1/auth/register", json=payload)
+     assert res1.status_code == 201
+@@ -51,45 +36,33 @@ async def test_register_duplicate_email_fails(client: AsyncClient):
+ 
+ @pytest.mark.asyncio
+ async def test_login_success_and_me_endpoint(client: AsyncClient):
+-    # 1. Register
+-    reg_res = await client.post("/api/v1/auth/register", json={
+-        "email": "newuser@swiftcare.io",
+-        "password": "UserPassword123!",
+-        "full_name": "New User",
+-    })
+-    assert reg_res.status_code == 201
+-
+-    # 2. Login
+-    login_res = await client.post("/api/v1/auth/login", json={
+-        "email": "newuser@swiftcare.io",
+-        "password": "UserPassword123!",
+-    })
+-    assert login_res.status_code == 200
+-    token = login_res.json()["access_token"]
+-
+-    # 3. Access /me protected endpoint
+-    headers = {"Authorization": f"Bearer {token}"}
++    headers = await _register_login(client, "admin@swiftcare.io", "admin", "System Admin")
+     me_res = await client.get("/api/v1/auth/me", headers=headers)
+     assert me_res.status_code == 200
+     me_data = me_res.json()
+-    assert me_data["email"] == "newuser@swiftcare.io"
+-    assert me_data["full_name"] == "New User"
+-    assert me_data["role"] == "patient"
++    assert me_data["email"] == "admin@swiftcare.io"
++    assert me_data["full_name"] == "System Admin"
++    assert me_data["role"] == "admin"
+     assert me_data["is_active"] is True
+ 
+ 
+ @pytest.mark.asyncio
+ async def test_login_invalid_password_returns_401(client: AsyncClient):
+-    await client.post("/api/v1/auth/register", json={
++    # Register user
++    reg_payload = {
+         "email": "test@swiftcare.io",
+         "password": "CorrectPassword123!",
+         "full_name": "Test User",
+-    })
++        "role": "patient"
++    }
++    await client.post("/api/v1/auth/register", json=reg_payload)
+ 
+-    login_res = await client.post("/api/v1/auth/login", json={
++    # Login with wrong password
++    login_payload = {
+         "email": "test@swiftcare.io",
+         "password": "WrongPassword123!"
+-    })
++    }
++    login_res = await client.post("/api/v1/auth/login", json=login_payload)
+     assert login_res.status_code == 401
+     assert login_res.json()["detail"] == "Invalid email or password"
+ 
+@@ -103,7 +76,7 @@ async def test_unauthenticated_request_returns_401(client: AsyncClient):
+ @pytest.mark.asyncio
+ async def test_short_password_returns_422(client: AsyncClient):
+     res = await client.post("/api/v1/auth/register", json={
+-        "email": "short@swiftcare.io", "password": "abc", "full_name": "Test",
++        "email": "short@swiftcare.io", "password": "abc", "full_name": "Test", "role": "patient",
+     })
+     assert res.status_code == 422
+ 
+@@ -111,7 +84,7 @@ async def test_short_password_returns_422(client: AsyncClient):
+ @pytest.mark.asyncio
+ async def test_blank_name_returns_422(client: AsyncClient):
+     res = await client.post("/api/v1/auth/register", json={
+-        "email": "blank@swiftcare.io", "password": "Password123!", "full_name": "   ",
++        "email": "blank@swiftcare.io", "password": "Password123!", "full_name": "   ", "role": "patient",
+     })
+     assert res.status_code == 422
+ 
+diff --git a/swiftcare-core/tests/test_patients_providers.py b/swiftcare-core/tests/test_patients_providers.py
+index 289e940..039f9f2 100644
+--- a/swiftcare-core/tests/test_patients_providers.py
++++ b/swiftcare-core/tests/test_patients_providers.py
+@@ -3,10 +3,24 @@ from httpx import AsyncClient
+ from tests.conftest import _register_login
+ 
+ 
++async def get_authenticated_headers(client: AsyncClient, email: str, role: str) -> dict:
++    """Helper to register and login a user and return Auth header."""
++    reg_payload = {
++        "email": email,
++        "password": "Password123!",
++        "full_name": f"User {role}",
++        "role": role,
++    }
++    reg_res = await client.post("/api/v1/auth/register", json=reg_payload)
++    assert reg_res.status_code == 201
++    token = reg_res.json()["access_token"]
++    return {"Authorization": f"Bearer {token}"}
++
++
+ @pytest.mark.asyncio
+ async def test_patient_crud_flow(client: AsyncClient):
+     # 1. Register Patient User
+-    headers = await _register_login(client, "patient1@swiftcare.io", "patient", "User patient")
++    headers = await get_authenticated_headers(client, "patient1@swiftcare.io", "patient")
+ 
+     # 2. Create Patient Profile
+     create_payload = {
+@@ -26,7 +40,7 @@ async def test_patient_crud_flow(client: AsyncClient):
+     dup_res = await client.post("/api/v1/patients", json=create_payload, headers=headers)
+     assert dup_res.status_code == 409
+ 
+-    # 4. Update Profile (patient updates their own)
++    # 4. Update Profile
+     update_payload = {"phone": "+1-555-9999", "address": "456 Updated St"}
+     update_res = await client.patch(f"/api/v1/patients/{patient_id}", json=update_payload, headers=headers)
+     assert update_res.status_code == 200
+@@ -35,25 +49,27 @@ async def test_patient_crud_flow(client: AsyncClient):
+ 
+ @pytest.mark.asyncio
+ async def test_provider_crud_and_availability_flow(client: AsyncClient):
+-    # 1. Register Provider User (role patched in DB)
+-    headers = await _register_login(client, "dr.smith@swiftcare.io", "provider", "User provider")
+-
+-    # 2. Create Provider Profile
+-    provider_payload = {
+-        "specialization": "Cardiology",
+-        "license_number": "CARD-99182",
+-        "consultation_fee": "250.00",
+-        "default_slot_minutes": 30
+-    }
+-    create_res = await client.post("/api/v1/providers", json=provider_payload, headers=headers)
++    # 1. Admin onboards provider in one shot
++    admin_headers = await _register_login(client, "admin.smith@swiftcare.io", "admin", "Admin")
++    create_res = await client.post("/api/v1/providers", json={
++        "email": "dr.smith@swiftcare.io", "password": "Password123!", "full_name": "User provider",
++        "specialization": "Cardiology", "license_number": "CARD-99182",
++        "consultation_fee": "250.00", "default_slot_minutes": 30,
++    }, headers=admin_headers)
+     assert create_res.status_code == 201
+     prov_data = create_res.json()
+     provider_id = prov_data["id"]
+     assert prov_data["specialization"] == "Cardiology"
+-
+-    # 3. Add Availability Slot via /me (provider self-management)
+-    avail_payload = {"weekday": 0, "start_time": "09:00", "end_time": "17:00"}
+-    avail_res = await client.post("/api/v1/providers/me/availability", json=avail_payload, headers=headers)
++    login = await client.post("/api/v1/auth/login", json={"email": "dr.smith@swiftcare.io", "password": "Password123!"})
++    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
++
++    # 3. Admin adds Availability Slot for provider via /{provider_id}/availability
++    avail_payload = {
++        "weekday": 0,  # Monday
++        "start_time": "09:00",
++        "end_time": "17:00"
++    }
++    avail_res = await client.post(f"/api/v1/providers/{provider_id}/availability", json=avail_payload, headers=admin_headers)
+     assert avail_res.status_code == 201
+     assert avail_res.json()["start_time"] == "09:00:00"
+ 
+@@ -64,6 +80,7 @@ async def test_provider_crud_and_availability_flow(client: AsyncClient):
+     assert len(items) == 1
+     assert items[0]["license_number"] == "CARD-99182"
+ 
++
+     # 5. Overlapping availability slot returns 409 Conflict
+     overlap_payload = {"weekday": 0, "start_time": "11:00", "end_time": "15:00"}
+     overlap_res = await client.post("/api/v1/providers/me/availability", json=overlap_payload, headers=headers)
+@@ -109,11 +126,14 @@ async def test_provider_crud_and_availability_flow(client: AsyncClient):
+ 
+ @pytest.mark.asyncio
+ async def test_provider_update_own_profile(client: AsyncClient):
+-    headers = await _register_login(client, "dr.update@swiftcare.io", "provider", "Dr Update")
++    admin_headers = await _register_login(client, "admin.update@swiftcare.io", "admin", "Admin")
+     await client.post("/api/v1/providers", json={
++        "email": "dr.update@swiftcare.io", "password": "Password123!", "full_name": "Dr Update",
+         "specialization": "Neurology", "license_number": "NEURO-001",
+         "consultation_fee": "300.00", "default_slot_minutes": 30,
+-    }, headers=headers)
++    }, headers=admin_headers)
++    login = await client.post("/api/v1/auth/login", json={"email": "dr.update@swiftcare.io", "password": "Password123!"})
++    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+ 
+     patch_res = await client.patch("/api/v1/providers/me", json={
+         "specialization": "Pediatrics", "consultation_fee": "200.00",
+diff --git a/swiftcare-core/tests/test_prescriptions.py b/swiftcare-core/tests/test_prescriptions.py
+index 0c88a8b..0cba98d 100644
+--- a/swiftcare-core/tests/test_prescriptions.py
++++ b/swiftcare-core/tests/test_prescriptions.py
+@@ -52,12 +52,13 @@ async def test_create_prescription_success(client: AsyncClient, provider_data, p
+ 
+ @pytest.mark.asyncio
+ async def test_allergy_blocks_prescription_returns_409(client: AsyncClient, provider_data, patient_data):
+-    # Record drug allergy first (nested under patient)
+-    allergy_res = await client.post(
+-        f"/api/v1/patients/{patient_data['patient_id']}/allergies",
+-        headers=provider_data["headers"],
+-        json={"allergen": "Amoxicillin", "allergy_type": "drug", "severity": "severe"},
+-    )
++    # Record drug allergy first
++    allergy_res = await client.post("/api/v1/allergies", headers=provider_data["headers"], json={
++        "patient_id": patient_data["patient_id"],
++        "allergen": "Amoxicillin",
++        "allergy_type": "drug",
++        "severity": "severe",
++    })
+     assert allergy_res.status_code == 201, allergy_res.text
+ 
+     appt_id = await _completed_appointment(client, provider_data, patient_data)
+diff --git a/swiftcare-core/tests/test_security_olac.py b/swiftcare-core/tests/test_security_olac.py
+index 251e650..aa684fb 100644
+--- a/swiftcare-core/tests/test_security_olac.py
++++ b/swiftcare-core/tests/test_security_olac.py
+@@ -14,12 +14,16 @@ from tests.conftest import _register_login
+ # ── Helpers ────────────────────────────────────────────────────────────
+ 
+ async def _mk_provider(client: AsyncClient, email: str) -> dict:
+-    headers = await _register_login(client, email, "provider", f"Dr {email}")
++    admin_email = f"admin+{email}"
++    admin_headers = await _register_login(client, admin_email, "admin", "Admin")
+     res = await client.post("/api/v1/providers", json={
++        "email": email, "password": "Password123!", "full_name": f"Dr {email}",
+         "specialization": "General", "license_number": f"LIC-{email[:4]}",
+         "consultation_fee": "100.00", "default_slot_minutes": 30,
+-    }, headers=headers)
++    }, headers=admin_headers)
+     assert res.status_code == 201, res.text
++    login = await client.post("/api/v1/auth/login", json={"email": email, "password": "Password123!"})
++    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+     return {"headers": headers, "provider_id": res.json()["id"]}
+ 
+ 
+diff --git a/swiftcare-notify/alembic/env.py b/swiftcare-notify/alembic/env.py
+index 0e2e260..4e153ef 100644
+--- a/swiftcare-notify/alembic/env.py
++++ b/swiftcare-notify/alembic/env.py
+@@ -1,7 +1,7 @@
+ import os
+ from logging.config import fileConfig
+ from dotenv import load_dotenv
+-from sqlalchemy import engine_from_config, pool, text
++from sqlalchemy import pool, text
+ from alembic import context
+ 
+ load_dotenv()
+@@ -40,24 +40,33 @@ def run_migrations_offline() -> None:
+         context.run_migrations()
+ 
+ 
+-def run_migrations_online() -> None:
+-    connectable = engine_from_config(
+-        config.get_section(config.config_ini_section, {}),
+-        prefix="sqlalchemy.",
+-        poolclass=pool.NullPool,
+-    )
+-    with connectable.connect() as connection:
+-        connection.execute(text("CREATE SCHEMA IF NOT EXISTS relay"))
+-        connection.commit()
+-        context.configure(
+-            connection=connection,
+-            target_metadata=target_metadata,
+-            include_schemas=True,
+-            include_name=include_name,
+-            version_table_schema="relay",
++async def run_migrations_online_async() -> None:
++    from sqlalchemy.ext.asyncio import create_async_engine
++
++    async_url = os.getenv("DATABASE_URL", "")
++    connectable = create_async_engine(async_url, poolclass=pool.NullPool)
++
++    async with connectable.connect() as connection:
++        await connection.execute(text("CREATE SCHEMA IF NOT EXISTS relay"))
++        await connection.commit()
++        await connection.run_sync(
++            lambda conn: context.configure(
++                connection=conn,
++                target_metadata=target_metadata,
++                include_schemas=True,
++                include_name=include_name,
++                version_table_schema="relay",
++            )
+         )
+-        with context.begin_transaction():
+-            context.run_migrations()
++        async with connection.begin():
++            await connection.run_sync(lambda conn: context.run_migrations())
++
++    await connectable.dispose()
++
++
++def run_migrations_online() -> None:
++    import asyncio
++    asyncio.run(run_migrations_online_async())
+ 
+ 
+ if context.is_offline_mode():
+diff --git a/swiftcare-notify/app/consumers/handlers.py b/swiftcare-notify/app/consumers/handlers.py
+index 5965268..b3f6d88 100644
+--- a/swiftcare-notify/app/consumers/handlers.py
++++ b/swiftcare-notify/app/consumers/handlers.py
+@@ -4,7 +4,7 @@ from uuid import uuid4
+ from sqlalchemy.exc import IntegrityError
+ from sqlalchemy.ext.asyncio import AsyncSession
+ 
+-from swiftcare_contracts.events import AppointmentCompletedEvent, AppointmentScheduledEvent, PrescriptionCreatedEvent
++from swiftcare_contracts.events import AppointmentCompletedEvent, AppointmentScheduledEvent, PasswordResetRequestedEvent, PrescriptionCreatedEvent
+ 
+ from app.core.config import get_settings
+ from app.db.models import AppointmentSlot, DocumentRecord
+@@ -72,19 +72,68 @@ async def handle_appointment_scheduled(event: AppointmentScheduledEvent, session
+     except IntegrityError:
+         await session.rollback()
+         logger.info("AppointmentSlot already exists for appt %s — skip", event.appointment_id)
++        return
++
++    try:
++        await send_email(
++            to=event.patient_email,
++            subject="Appointment confirmed — SwiftCare",
++            body=(
++                f"Hello {event.patient_name},\n\n"
++                f"Your appointment with {event.provider_name} is confirmed.\n\n"
++                f"Date & time: {event.scheduled_start.strftime('%Y-%m-%d at %H:%M UTC')}\n"
++                f"Reason: {event.reason}\n\n"
++                f"— SwiftCare"
++            ),
++        )
++    except Exception as e:
++        logger.warning("Confirmation email failed for appt=%s: %s", event.appointment_id, e)
+ 
+ 
+ async def handle_prescription_created(event: PrescriptionCreatedEvent, session: AsyncSession) -> None:
+-    logger.info(
+-        "prescription.created received — rx=%s patient=%s (PDF not yet implemented)",
+-        event.prescription_id, event.patient_id,
+-    )
++    drugs = ", ".join(event.drug_names) if event.drug_names else "see your account for details"
++    try:
++        await send_email(
++            to=event.patient_email,
++            subject="Your prescription is ready — SwiftCare",
++            body=(
++                f"Hello {event.patient_name},\n\n"
++                f"{event.provider_name} has created a prescription for you.\n\n"
++                f"Medications: {drugs}\n\n"
++                f"Log in to your SwiftCare account to view full details.\n\n"
++                f"— SwiftCare"
++            ),
++        )
++    except Exception as e:
++        logger.warning("Prescription email failed for rx=%s: %s", event.prescription_id, e)
++
++
++async def handle_password_reset_requested(event: PasswordResetRequestedEvent, session: AsyncSession) -> None:
++    logger.info("Sending password reset email to %s", event.user_email)
++    try:
++        await send_email(
++            to=event.user_email,
++            subject="Reset your password — SwiftCare",
++            body=(
++                f"Hello {event.user_name},\n\n"
++                f"Use the token below to reset your password (expires in 1 hour):\n\n"
++                f"{event.reset_token}\n\n"
++                f"POST /api/v1/auth/reset-password with:\n"
++                f'  {{"token": "<above token>", "new_password": "<your new password>"}}\n\n'
++                f"If you did not request this, ignore this email.\n\n"
++                f"— SwiftCare"
++            ),
++        )
++        logger.info("Password reset email sent to %s", event.user_email)
++    except Exception as e:
++        logger.warning("Password reset email failed for %s: %s", event.user_email, e)
+ 
+ 
+ _HANDLERS = {
+     "appointment.scheduled": (AppointmentScheduledEvent, handle_appointment_scheduled),
+     "appointment.completed": (AppointmentCompletedEvent, handle_appointment_completed),
+     "prescription.created": (PrescriptionCreatedEvent, handle_prescription_created),
++    "auth.password_reset_requested": (PasswordResetRequestedEvent, handle_password_reset_requested),
+ }
+ 
+ 
+diff --git a/swiftcare-notify/app/consumers/runner.py b/swiftcare-notify/app/consumers/runner.py
+index 5783edf..871fac8 100644
+--- a/swiftcare-notify/app/consumers/runner.py
++++ b/swiftcare-notify/app/consumers/runner.py
+@@ -43,6 +43,7 @@ async def handle_message(msg_id: bytes, fields: dict, redis: Redis, factory: asy
+     """
+     payload = json.loads(fields[b"data"])
+     event_id = payload.get("event_id", "")
++    logger.info("Received event event_id=%s type=%s", event_id, payload.get("event_type"))
+ 
+     async with factory() as session:
+         if await _mark_processed_if_new(session, event_id):
+@@ -54,6 +55,7 @@ async def handle_message(msg_id: bytes, fields: dict, redis: Redis, factory: asy
+             await dispatch(payload, session)
+             await session.commit()
+             await redis.xack(STREAM, GROUP, msg_id)
++            logger.info("Event processed and acked event_id=%s", event_id)
+         except Exception:
+             await session.rollback()
+             logger.exception("Handler failed for event %s — leaving in pending list for retry", event_id)
+@@ -73,4 +75,4 @@ async def run_consumer(redis: Redis, factory: async_sessionmaker, consumer_name:
+                 try:
+                     await handle_message(msg_id, fields, redis, factory)
+                 except Exception:
+-                    pass  # logged inside; stay alive for next message
++                    logger.exception("Unhandled error processing msg_id=%s — skipping", msg_id)
+diff --git a/swiftcare-notify/app/core/config.py b/swiftcare-notify/app/core/config.py
+index 0905247..280c7a0 100644
+--- a/swiftcare-notify/app/core/config.py
++++ b/swiftcare-notify/app/core/config.py
+@@ -8,7 +8,7 @@ class Settings(BaseSettings):
+     consumer_name: str = "notify-1"
+ 
+     # S3 / MinIO
+-    s3_endpoint: str = "http://minio:9000"
++    s3_endpoint: str = "http://localhost:9000"
+     s3_access_key: str = "swiftcare"
+     s3_secret_key: str = "swiftcare123"
+     s3_bucket: str = "swiftcare-docs"
+@@ -19,8 +19,9 @@ class Settings(BaseSettings):
+     smtp_user: str = ""
+     smtp_pass: str = ""
+     mail_from: str = "noreply@swiftcare.local"
++    mock_smtp: bool = False  # set True to log emails instead of sending
+ 
+-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
++    model_config = SettingsConfigDict(env_file=("../.env", ".env"), extra="ignore")
+ 
+ 
+ @lru_cache
+diff --git a/swiftcare-notify/app/mail/sender.py b/swiftcare-notify/app/mail/sender.py
+index 936c7b3..3f21e8a 100644
+--- a/swiftcare-notify/app/mail/sender.py
++++ b/swiftcare-notify/app/mail/sender.py
+@@ -1,20 +1,28 @@
++import logging
+ from email.message import EmailMessage
+ 
+ from app.core.config import get_settings
+ 
++logger = logging.getLogger(__name__)
++
+ 
+ async def send_email(to: str, subject: str, body: str) -> None:
+-    import aiosmtplib  # ponytail: lazy — not installed in dev/test venv; mocked in tests
+     s = get_settings()
++
++    if s.mock_smtp:
++        logger.info("[MOCK_SMTP] to=%s subject=%r body=%r", to, subject, body)
++        return
++
++    import aiosmtplib  # ponytail: lazy — not installed in dev/test venv; mocked in tests
+     msg = EmailMessage()
+     msg["From"] = s.mail_from
+     msg["To"] = to
+     msg["Subject"] = subject
+     msg.set_content(body)
+ 
+-    kwargs = {}
++    kwargs: dict = {"start_tls": False}
+     if s.smtp_user:
+-        kwargs.update(username=s.smtp_user, password=s.smtp_pass)
++        kwargs.update(username=s.smtp_user, password=s.smtp_pass, start_tls=True)
+ 
+     await aiosmtplib.send(
+         msg,
+diff --git a/swiftcare-notify/app/main.py b/swiftcare-notify/app/main.py
+index 93c5dac..b00039f 100644
+--- a/swiftcare-notify/app/main.py
++++ b/swiftcare-notify/app/main.py
+@@ -11,7 +11,19 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
+ logger = logging.getLogger(__name__)
+ 
+ 
++async def init_db() -> None:
++    from sqlalchemy import text
++    from app.db.engine import engine
++    from app.db.base import RelayBase
++    import app.db.models  # noqa: F401 — register all models
++    async with engine.begin() as conn:
++        await conn.execute(text("CREATE SCHEMA IF NOT EXISTS relay"))
++        await conn.run_sync(RelayBase.metadata.create_all)
++    logger.info("DB schema ready")
++
++
+ async def main() -> None:
++    await init_db()
+     settings = get_settings()
+     redis = aioredis.from_url(settings.redis_url)
+     try:
+@@ -22,5 +34,8 @@ async def main() -> None:
+ 
+ if __name__ == "__main__":
+     settings = get_settings()
+-    ensure_bucket(get_s3_client(), settings.s3_bucket)
++    try:
++        ensure_bucket(get_s3_client(), settings.s3_bucket)
++    except Exception as e:
++        logger.warning("S3 unavailable at startup — PDF uploads will fail: %s", e)
+     asyncio.run(main())
+diff --git a/swiftcare-notify/tests/test_sender.py b/swiftcare-notify/tests/test_sender.py
+new file mode 100644
+index 0000000..0d3c869
+--- /dev/null
++++ b/swiftcare-notify/tests/test_sender.py
+@@ -0,0 +1,61 @@
++import sys
++import pytest
++from unittest.mock import AsyncMock, MagicMock, patch
++
++from app.core.config import Settings
++from app.mail.sender import send_email
++
++
++def _settings(**kwargs) -> Settings:
++    return Settings(database_url="sqlite:///:memory:", **kwargs)
++
++
++@pytest.mark.asyncio
++async def test_mock_smtp_skips_network_call(caplog):
++    """mock_smtp=True must log the email and never touch the network."""
++    import logging
++    with (
++        patch("app.mail.sender.get_settings", return_value=_settings(mock_smtp=True)),
++        caplog.at_level(logging.INFO, logger="app.mail.sender"),
++    ):
++        await send_email("patient@example.com", "Hello", "Body")
++
++    assert any("[MOCK_SMTP]" in r.message for r in caplog.records)
++
++
++@pytest.mark.asyncio
++async def test_no_credentials_sends_without_starttls():
++    """Plain SMTP (no credentials) → start_tls=False, no username/password."""
++    mock_lib = MagicMock()
++    mock_lib.send = AsyncMock()
++
++    with (
++        patch("app.mail.sender.get_settings", return_value=_settings(smtp_host="mailhog", smtp_port=1025)),
++        patch.dict(sys.modules, {"aiosmtplib": mock_lib}),
++    ):
++        await send_email("patient@example.com", "Subject", "Body")
++
++    _, kw = mock_lib.send.call_args
++    assert kw["start_tls"] is False
++    assert "username" not in kw
++    assert "password" not in kw
++
++
++@pytest.mark.asyncio
++async def test_credentials_enable_starttls():
++    """SMTP credentials present → start_tls=True, username + password forwarded."""
++    mock_lib = MagicMock()
++    mock_lib.send = AsyncMock()
++
++    with (
++        patch("app.mail.sender.get_settings", return_value=_settings(
++            smtp_host="smtp.example.com", smtp_port=587, smtp_user="u", smtp_pass="p",
++        )),
++        patch.dict(sys.modules, {"aiosmtplib": mock_lib}),
++    ):
++        await send_email("patient@example.com", "Subject", "Body")
++
++    _, kw = mock_lib.send.call_args
++    assert kw["start_tls"] is True
++    assert kw["username"] == "u"
++    assert kw["password"] == "p"
