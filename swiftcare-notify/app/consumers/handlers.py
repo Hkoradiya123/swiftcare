@@ -4,7 +4,7 @@ from uuid import uuid4
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from swiftcare_contracts.events import AppointmentCompletedEvent, AppointmentScheduledEvent, PrescriptionCreatedEvent
+from swiftcare_contracts.events import AppointmentCompletedEvent, AppointmentScheduledEvent, PasswordResetRequestedEvent, PrescriptionCreatedEvent
 
 from app.core.config import get_settings
 from app.db.models import AppointmentSlot, DocumentRecord
@@ -72,19 +72,68 @@ async def handle_appointment_scheduled(event: AppointmentScheduledEvent, session
     except IntegrityError:
         await session.rollback()
         logger.info("AppointmentSlot already exists for appt %s — skip", event.appointment_id)
+        return
+
+    try:
+        await send_email(
+            to=event.patient_email,
+            subject="Appointment confirmed — SwiftCare",
+            body=(
+                f"Hello {event.patient_name},\n\n"
+                f"Your appointment with {event.provider_name} is confirmed.\n\n"
+                f"Date & time: {event.scheduled_start.strftime('%Y-%m-%d at %H:%M UTC')}\n"
+                f"Reason: {event.reason}\n\n"
+                f"— SwiftCare"
+            ),
+        )
+    except Exception as e:
+        logger.warning("Confirmation email failed for appt=%s: %s", event.appointment_id, e)
 
 
 async def handle_prescription_created(event: PrescriptionCreatedEvent, session: AsyncSession) -> None:
-    logger.info(
-        "prescription.created received — rx=%s patient=%s (PDF not yet implemented)",
-        event.prescription_id, event.patient_id,
-    )
+    drugs = ", ".join(event.drug_names) if event.drug_names else "see your account for details"
+    try:
+        await send_email(
+            to=event.patient_email,
+            subject="Your prescription is ready — SwiftCare",
+            body=(
+                f"Hello {event.patient_name},\n\n"
+                f"{event.provider_name} has created a prescription for you.\n\n"
+                f"Medications: {drugs}\n\n"
+                f"Log in to your SwiftCare account to view full details.\n\n"
+                f"— SwiftCare"
+            ),
+        )
+    except Exception as e:
+        logger.warning("Prescription email failed for rx=%s: %s", event.prescription_id, e)
+
+
+async def handle_password_reset_requested(event: PasswordResetRequestedEvent, session: AsyncSession) -> None:
+    logger.info("Sending password reset email to %s", event.user_email)
+    try:
+        await send_email(
+            to=event.user_email,
+            subject="Reset your password — SwiftCare",
+            body=(
+                f"Hello {event.user_name},\n\n"
+                f"Use the token below to reset your password (expires in 1 hour):\n\n"
+                f"{event.reset_token}\n\n"
+                f"POST /api/v1/auth/reset-password with:\n"
+                f'  {{"token": "<above token>", "new_password": "<your new password>"}}\n\n'
+                f"If you did not request this, ignore this email.\n\n"
+                f"— SwiftCare"
+            ),
+        )
+        logger.info("Password reset email sent to %s", event.user_email)
+    except Exception as e:
+        logger.warning("Password reset email failed for %s: %s", event.user_email, e)
 
 
 _HANDLERS = {
     "appointment.scheduled": (AppointmentScheduledEvent, handle_appointment_scheduled),
     "appointment.completed": (AppointmentCompletedEvent, handle_appointment_completed),
     "prescription.created": (PrescriptionCreatedEvent, handle_prescription_created),
+    "auth.password_reset_requested": (PasswordResetRequestedEvent, handle_password_reset_requested),
 }
 
 

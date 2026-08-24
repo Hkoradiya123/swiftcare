@@ -11,13 +11,22 @@ from app.schemas.provider import (
     ProviderAvailabilityCreate,
     ProviderAvailabilityRead,
     ProviderAvailabilityUpdate,
-    ProviderCreate,
+    ProviderOnboard,
     ProviderRead,
     ProviderUpdate,
 )
 from app.services.provider import ProviderService
 
 router = APIRouter(prefix="/providers", tags=["providers"])
+
+
+@router.post("", response_model=ProviderRead, status_code=status.HTTP_201_CREATED)
+async def onboard_provider(
+    data: ProviderOnboard,
+    _: User = Depends(require_role(UserRole.ADMIN)),
+    db: AsyncSession = Depends(get_db),
+) -> ProviderRead:
+    return await ProviderService(db).onboard(data)
 
 
 @router.get("", response_model=PaginatedResponse[ProviderRead])
@@ -29,15 +38,6 @@ async def list_providers(
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[ProviderRead]:
     return await ProviderService(db).list_all(page, size, specialization)
-
-@router.post("", response_model=ProviderRead, status_code=status.HTTP_201_CREATED)
-@router.post("/me", response_model=ProviderRead, status_code=status.HTTP_201_CREATED)
-async def create_provider(
-    data: ProviderCreate,
-    current_user: User = Depends(require_role(UserRole.PROVIDER, UserRole.ADMIN)),
-    db: AsyncSession = Depends(get_db),
-) -> ProviderRead:
-    return await ProviderService(db).create(data, current_user)
 
 
 @router.get("/me", response_model=ProviderRead)
@@ -104,15 +104,6 @@ async def delete_my_availability(
     await ProviderService(db).delete_availability(provider.id, slot_id, current_user)
 
 
-@router.get("/{provider_id}", response_model=ProviderRead)
-async def get_provider(
-    provider_id: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> ProviderRead:
-    return await ProviderService(db).get(provider_id)
-
-
 @router.patch("/{provider_id}", response_model=ProviderRead)
 async def update_provider(
     provider_id: int,
@@ -123,49 +114,24 @@ async def update_provider(
     return await ProviderService(db).update(provider_id, data, current_user)
 
 
-@router.get("/{provider_id}/availability", response_model=list[ProviderAvailabilityRead])
-async def list_provider_availabilities(
+@router.get("/{provider_id}", response_model=ProviderRead)
+async def get_provider(
     provider_id: int,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[ProviderAvailabilityRead]:
-    return await ProviderService(db).list_availabilities(provider_id)
+) -> ProviderRead:
+    return await ProviderService(db).get(provider_id)
 
 
 @router.post(
     "/{provider_id}/availability",
-    response_model=Union[ProviderAvailabilityRead, list[ProviderAvailabilityRead]],
+    response_model=ProviderAvailabilityRead,
     status_code=status.HTTP_201_CREATED,
 )
 async def add_availability(
     provider_id: int,
-    data: Union[ProviderAvailabilityCreate, list[ProviderAvailabilityCreate]],
-    current_user: User = Depends(require_role(UserRole.ADMIN)),
-    db: AsyncSession = Depends(get_db),
-) -> Union[ProviderAvailabilityRead, list[ProviderAvailabilityRead]]:
-    if isinstance(data, list):
-        return await ProviderService(db).add_availabilities_bulk(provider_id, data, current_user)
-    return await ProviderService(db).add_availability(provider_id, data, current_user)
-
-
-@router.patch("/{provider_id}/availability/{slot_id}", response_model=ProviderAvailabilityRead)
-async def update_availability(
-    provider_id: int,
-    slot_id: int,
-    data: ProviderAvailabilityUpdate,
+    data: ProviderAvailabilityCreate,
     current_user: User = Depends(require_role(UserRole.ADMIN)),
     db: AsyncSession = Depends(get_db),
 ) -> ProviderAvailabilityRead:
-    return await ProviderService(db).update_availability(provider_id, slot_id, data, current_user)
-
-
-@router.delete("/{provider_id}/availability/{slot_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_availability(
-    provider_id: int,
-    slot_id: int,
-    current_user: User = Depends(require_role(UserRole.ADMIN)),
-    db: AsyncSession = Depends(get_db),
-) -> None:
-    await ProviderService(db).delete_availability(provider_id, slot_id, current_user)
-
-
+    return await ProviderService(db).add_availability(provider_id, data, current_user)

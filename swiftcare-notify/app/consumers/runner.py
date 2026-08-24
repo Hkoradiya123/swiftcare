@@ -43,6 +43,7 @@ async def handle_message(msg_id: bytes, fields: dict, redis: Redis, factory: asy
     """
     payload = json.loads(fields[b"data"])
     event_id = payload.get("event_id", "")
+    logger.info("Received event event_id=%s type=%s", event_id, payload.get("event_type"))
 
     async with factory() as session:
         if await _mark_processed_if_new(session, event_id):
@@ -54,6 +55,7 @@ async def handle_message(msg_id: bytes, fields: dict, redis: Redis, factory: asy
             await dispatch(payload, session)
             await session.commit()
             await redis.xack(STREAM, GROUP, msg_id)
+            logger.info("Event processed and acked event_id=%s", event_id)
         except Exception:
             await session.rollback()
             logger.exception("Handler failed for event %s — leaving in pending list for retry", event_id)
@@ -73,4 +75,4 @@ async def run_consumer(redis: Redis, factory: async_sessionmaker, consumer_name:
                 try:
                     await handle_message(msg_id, fields, redis, factory)
                 except Exception:
-                    pass  # logged inside; stay alive for next message
+                    logger.exception("Unhandled error processing msg_id=%s — skipping", msg_id)

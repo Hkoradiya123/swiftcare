@@ -1,11 +1,28 @@
+from datetime import timezone, datetime
 from typing import Optional
+from uuid import uuid4
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
+try:
+    from swiftcare_contracts.events import PrescriptionCreatedEvent
+except ModuleNotFoundError:
+    import sys
+    from pathlib import Path
+    contracts_dir = str(Path(__file__).resolve().parents[3])
+    if contracts_dir not in sys.path:
+        sys.path.append(contracts_dir)
+    from swiftcare_contracts.events import PrescriptionCreatedEvent
+
+from app.events.publisher import publish
 from app.models.allergy import Allergy
 from app.models.appointment import Appointment
 from app.models.enums import AppointmentStatus, PrescriptionStatus
+from app.models.patient import Patient
 from app.models.prescription import Prescription, PrescriptionItem
+from app.models.provider import Provider
 from app.models.user import User
 from app.repositories.appointment import AppointmentRepository
 from app.repositories.prescription import AllergyRepository, PrescriptionRepository
@@ -57,28 +74,43 @@ class PrescriptionService:
             ))
 
         await self.db.commit()
+
+        patient_row = (await self.db.execute(
+            select(Patient).options(joinedload(Patient.user)).where(Patient.id == data.patient_id)
+        )).scalar_one()
+        provider_row = (await self.db.execute(
+            select(Provider).options(joinedload(Provider.user)).where(Provider.id == provider_id)
+        )).scalar_one()
+        await publish(PrescriptionCreatedEvent(
+            event_id=uuid4(),
+            prescription_id=rx.id,
+            patient_id=data.patient_id,
+            provider_id=provider_id,
+            created_at=datetime.now(timezone.utc),
+            patient_name=patient_row.user.full_name,
+            patient_email=patient_row.user.email,
+            provider_name=provider_row.user.full_name,
+            drug_names=[item.drug_name for item in data.items],
+        ))
+
         return await self.repo.get_by_id(rx.id)
 
     async def get(self, rx_id: int, current_user: User) -> Prescription:
         rx = await self.repo.get_by_id(rx_id)
         if not rx:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prescription not found")
-
         if current_user.role == "admin":
             return rx
-
         if current_user.role == "patient":
             from app.repositories.patient import PatientRepository
             patient = await PatientRepository(self.db).get_by_user_id(current_user.id)
             if not patient or rx.patient_id != patient.id:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-
         elif current_user.role == "provider":
             from app.repositories.provider import ProviderRepository
             provider = await ProviderRepository(self.db).get_by_user_id(current_user.id)
             if not provider or rx.provider_id != provider.id:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-
         return rx
 
     async def list_all(
@@ -93,7 +125,6 @@ class PrescriptionService:
     ) -> list[Prescription]:
         forced_patient_id = patient_id
         forced_provider_id = provider_id
-
         if current_user.role == "patient":
             from app.repositories.patient import PatientRepository
             patient = await PatientRepository(self.db).get_by_user_id(current_user.id)
@@ -106,7 +137,6 @@ class PrescriptionService:
             if not provider:
                 return []
             forced_provider_id = provider.id
-
         return await self.repo.list_all(
             patient_id=forced_patient_id,
             provider_id=forced_provider_id,

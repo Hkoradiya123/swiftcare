@@ -39,11 +39,11 @@ class AppointmentRepository(BaseRepository[Appointment]):
     async def list_filtered(
         self,
         provider_id: Optional[int],
-        patient_id: Optional[int],
         status: Optional[str],
         date: Optional[str],
         offset: int,
         limit: int,
+        patient_id: Optional[int] = None,
     ) -> list[Appointment]:
         stmt = select(Appointment).where(Appointment.deleted_at.is_(None))
         if provider_id:

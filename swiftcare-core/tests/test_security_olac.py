@@ -14,12 +14,16 @@ from tests.conftest import _register_login
 # ── Helpers ────────────────────────────────────────────────────────────
 
 async def _mk_provider(client: AsyncClient, email: str) -> dict:
-    headers = await _register_login(client, email, "provider", f"Dr {email}")
+    admin_email = f"admin+{email}"
+    admin_headers = await _register_login(client, admin_email, "admin", "Admin")
     res = await client.post("/api/v1/providers", json={
+        "email": email, "password": "Password123!", "full_name": f"Dr {email}",
         "specialization": "General", "license_number": f"LIC-{email[:4]}",
         "consultation_fee": "100.00", "default_slot_minutes": 30,
-    }, headers=headers)
+    }, headers=admin_headers)
     assert res.status_code == 201, res.text
+    login = await client.post("/api/v1/auth/login", json={"email": email, "password": "Password123!"})
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
     return {"headers": headers, "provider_id": res.json()["id"]}
 
 

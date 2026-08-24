@@ -76,7 +76,17 @@ async def cancel_prescription(
     return await PrescriptionService(db).cancel(rx_id, provider.id)
 
 
-# ── Allergies (nested under patient) ───────────────────────────────────
+# ── Allergies ───────────────────────────────────────────────────────────
+
+@router.post(
+    "/allergies",
+    response_model=AllergyRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role(UserRole.PROVIDER, UserRole.ADMIN))],
+)
+async def create_allergy_flat(body: AllergyCreate, db: AsyncSession = Depends(get_db)):
+    return await AllergyService(db).create(body)
+
 
 @router.post(
     "/patients/{patient_id}/allergies",

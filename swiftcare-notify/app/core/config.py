@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     consumer_name: str = "notify-1"
 
     # S3 / MinIO
-    s3_endpoint: str = "http://minio:9000"
+    s3_endpoint: str = "http://localhost:9000"
     s3_access_key: str = "swiftcare"
     s3_secret_key: str = "swiftcare123"
     s3_bucket: str = "swiftcare-docs"
@@ -19,8 +19,9 @@ class Settings(BaseSettings):
     smtp_user: str = ""
     smtp_pass: str = ""
     mail_from: str = "noreply@swiftcare.local"
+    mock_smtp: bool = False  # set True to log emails instead of sending
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=("../.env", ".env"), extra="ignore")
 
 
 @lru_cache

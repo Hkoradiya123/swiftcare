@@ -1,3 +1,4 @@
+from datetime import date
 from typing import List, Optional
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -51,7 +52,6 @@ class PatientRepository(BaseRepository[Patient]):
         from_date: Optional[date] = None,
         to_date: Optional[date] = None,
     ) -> tuple[List[Patient], int, dict[int, list]]:
-        from datetime import date as dt_date
         from sqlalchemy import cast, Date, func
         from app.models.appointment import Appointment
 
@@ -63,11 +63,7 @@ class PatientRepository(BaseRepository[Patient]):
             count_stmt = select(func.count(func.distinct(Patient.id))).join(
                 Appointment, Appointment.patient_id == Patient.id
             )
-
-            filters = [
-                Patient.deleted_at.is_(None),
-                Appointment.deleted_at.is_(None),
-            ]
+            filters = [Patient.deleted_at.is_(None), Appointment.deleted_at.is_(None)]
             if provider_id is not None:
                 filters.append(Appointment.provider_id == provider_id)
             if from_date is not None:
@@ -75,23 +71,15 @@ class PatientRepository(BaseRepository[Patient]):
             if to_date is not None:
                 filters.append(cast(Appointment.scheduled_start, Date) <= to_date)
 
-            stmt = (
-                stmt.where(*filters)
-                .distinct()
-                .options(selectinload(Patient.user))
-                .order_by(Patient.id)
-                .offset(offset)
-                .limit(size)
-            )
+            stmt = (stmt.where(*filters).distinct().options(selectinload(Patient.user))
+                    .order_by(Patient.id).offset(offset).limit(size))
             count_stmt = count_stmt.where(*filters)
 
             result = await self.db.execute(stmt)
             patients = list(result.scalars().all())
-
             count_res = await self.db.execute(count_stmt)
             total = count_res.scalar() or 0
 
-            # Map appointments for returned patients matching the filters
             patient_ids = [p.id for p in patients]
             appt_map: dict[int, list] = {}
             if patient_ids:
@@ -105,31 +93,20 @@ class PatientRepository(BaseRepository[Patient]):
                     appt_stmt = appt_stmt.where(cast(Appointment.scheduled_start, Date) >= from_date)
                 if to_date is not None:
                     appt_stmt = appt_stmt.where(cast(Appointment.scheduled_start, Date) <= to_date)
-
-                appt_res = await self.db.execute(
-                    appt_stmt.order_by(Appointment.scheduled_start.desc())
-                )
+                appt_res = await self.db.execute(appt_stmt.order_by(Appointment.scheduled_start.desc()))
                 for appt in appt_res.scalars().all():
                     appt_map.setdefault(appt.patient_id, []).append(appt)
 
             return patients, total, appt_map
         else:
-            stmt = (
-                select(Patient)
-                .where(Patient.deleted_at.is_(None))
-                .options(selectinload(Patient.user))
-                .order_by(Patient.id)
-                .offset(offset)
-                .limit(size)
-            )
             count_stmt = select(func.count(Patient.id)).where(Patient.deleted_at.is_(None))
-
-            result = await self.db.execute(stmt)
+            result = await self.db.execute(
+                select(Patient).where(Patient.deleted_at.is_(None))
+                .options(selectinload(Patient.user)).order_by(Patient.id).offset(offset).limit(size)
+            )
             patients = list(result.scalars().all())
-
             count_res = await self.db.execute(count_stmt)
             total = count_res.scalar() or 0
-
             return patients, total, {}
 
     async def create(self, patient: Patient) -> Patient:
@@ -137,5 +114,3 @@ class PatientRepository(BaseRepository[Patient]):
         await self.db.flush()
         await self.db.refresh(patient)
         return patient
-
-

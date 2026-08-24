@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 from pydantic import BaseModel, field_validator
 
@@ -31,9 +31,6 @@ class PatientUpdate(BaseModel):
     address: Optional[str] = None
 
 
-from datetime import datetime
-
-
 class AppointmentSummary(BaseModel):
     id: int
     provider_id: int
@@ -61,4 +58,3 @@ class PatientRead(BaseModel):
     appointments: Optional[list[AppointmentSummary]] = None
 
     model_config = {"from_attributes": True}
-

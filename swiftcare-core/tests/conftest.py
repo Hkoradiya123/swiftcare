@@ -1,13 +1,3 @@
-import sys
-from pathlib import Path
-
-# Add swiftcare-contracts to sys.path
-contracts_dir = str(Path(__file__).resolve().parents[2] / "swiftcare-contracts")
-if contracts_dir not in sys.path:
-    sys.path.insert(0, contracts_dir)
-
-from sqlalchemy import update
-
 import pytest
 import pytest_asyncio
 from collections import defaultdict
@@ -15,7 +5,6 @@ from httpx import ASGITransport, AsyncClient
 from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
-
 
 import app.models  # Register all ORM models on Base.metadata
 from app.db.base import Base
@@ -101,33 +90,34 @@ async def client():
 # ── Shared scenario helpers ────────────────────────────────────────────
 
 async def _register_login(client: AsyncClient, email: str, role: str, full_name: str) -> dict:
-    """Register a user (always PATIENT) then patch role in DB if needed."""
-    from app.models.user import User as UserModel
+    from sqlalchemy import update
+    from app.models.user import User
     res = await client.post("/api/v1/auth/register", json={
         "email": email, "password": "Password123!", "full_name": full_name,
     })
     assert res.status_code == 201, res.text
-    token = res.json()["access_token"]
-
     if role != "patient":
         async with TestingSessionLocal() as session:
-            await session.execute(
-                update(UserModel).where(UserModel.email == email).values(role=role)
-            )
+            await session.execute(update(User).where(User.email == email).values(role=role))
             await session.commit()
-
-    return {"Authorization": f"Bearer {token}"}
+    login = await client.post("/api/v1/auth/login", json={"email": email, "password": "Password123!"})
+    return {"Authorization": f"Bearer {login.json()['access_token']}"}
 
 
 @pytest_asyncio.fixture
 async def provider_data(client: AsyncClient):
-    headers = await _register_login(client, "dr.test@swiftcare.io", "provider", "Dr Test")
+    admin_headers = await _register_login(client, "admin.fixture@swiftcare.io", "admin", "Admin User")
     res = await client.post("/api/v1/providers", json={
+        "email": "dr.test@swiftcare.io", "password": "Password123!", "full_name": "Dr Test",
         "specialization": "General", "license_number": "LIC-001",
         "consultation_fee": "100.00", "default_slot_minutes": 30,
-    }, headers=headers)
+    }, headers=admin_headers)
     assert res.status_code == 201, res.text
-    return {"headers": headers, "provider_id": res.json()["id"]}
+    provider_id = res.json()["id"]
+    login = await client.post("/api/v1/auth/login", json={"email": "dr.test@swiftcare.io", "password": "Password123!"})
+    assert login.status_code == 200, login.text
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    return {"headers": headers, "provider_id": provider_id}
 
 
 @pytest_asyncio.fixture
