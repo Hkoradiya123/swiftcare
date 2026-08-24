@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import subprocess
+import sys
 import redis.asyncio as aioredis
 
 from app.core.config import get_settings
@@ -26,10 +28,21 @@ async def main() -> None:
     await init_db()
     settings = get_settings()
     redis = aioredis.from_url(settings.redis_url)
+
+    celery_worker = subprocess.Popen(
+        [sys.executable, "-m", "celery", "-A", "app.celery_app", "worker", "--loglevel=info"],
+    )
+    celery_beat = subprocess.Popen(
+        [sys.executable, "-m", "celery", "-A", "app.celery_app", "beat", "--loglevel=info"],
+    )
+    logger.info("Celery worker and beat started")
+
     try:
         await run_consumer(redis, AsyncSessionLocal, consumer_name=settings.consumer_name)
     finally:
         await redis.aclose()
+        celery_worker.terminate()
+        celery_beat.terminate()
 
 
 if __name__ == "__main__":
