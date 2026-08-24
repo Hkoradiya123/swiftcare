@@ -3,10 +3,24 @@ from httpx import AsyncClient
 from tests.conftest import _register_login
 
 
+async def get_authenticated_headers(client: AsyncClient, email: str, role: str) -> dict:
+    """Helper to register and login a user and return Auth header."""
+    reg_payload = {
+        "email": email,
+        "password": "Password123!",
+        "full_name": f"User {role}",
+        "role": role,
+    }
+    reg_res = await client.post("/api/v1/auth/register", json=reg_payload)
+    assert reg_res.status_code == 201
+    token = reg_res.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
 @pytest.mark.asyncio
 async def test_patient_crud_flow(client: AsyncClient):
     # 1. Register Patient User
-    headers = await _register_login(client, "patient1@swiftcare.io", "patient", "User patient")
+    headers = await get_authenticated_headers(client, "patient1@swiftcare.io", "patient")
 
     # 2. Create Patient Profile
     create_payload = {
@@ -26,7 +40,7 @@ async def test_patient_crud_flow(client: AsyncClient):
     dup_res = await client.post("/api/v1/patients", json=create_payload, headers=headers)
     assert dup_res.status_code == 409
 
-    # 4. Update Profile (patient updates their own)
+    # 4. Update Profile
     update_payload = {"phone": "+1-555-9999", "address": "456 Updated St"}
     update_res = await client.patch(f"/api/v1/patients/{patient_id}", json=update_payload, headers=headers)
     assert update_res.status_code == 200
@@ -35,25 +49,27 @@ async def test_patient_crud_flow(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_provider_crud_and_availability_flow(client: AsyncClient):
-    # 1. Register Provider User (role patched in DB)
-    headers = await _register_login(client, "dr.smith@swiftcare.io", "provider", "User provider")
-
-    # 2. Create Provider Profile
-    provider_payload = {
-        "specialization": "Cardiology",
-        "license_number": "CARD-99182",
-        "consultation_fee": "250.00",
-        "default_slot_minutes": 30
-    }
-    create_res = await client.post("/api/v1/providers", json=provider_payload, headers=headers)
+    # 1. Admin onboards provider in one shot
+    admin_headers = await _register_login(client, "admin.smith@swiftcare.io", "admin", "Admin")
+    create_res = await client.post("/api/v1/providers", json={
+        "email": "dr.smith@swiftcare.io", "password": "Password123!", "full_name": "User provider",
+        "specialization": "Cardiology", "license_number": "CARD-99182",
+        "consultation_fee": "250.00", "default_slot_minutes": 30,
+    }, headers=admin_headers)
     assert create_res.status_code == 201
     prov_data = create_res.json()
     provider_id = prov_data["id"]
     assert prov_data["specialization"] == "Cardiology"
+    login = await client.post("/api/v1/auth/login", json={"email": "dr.smith@swiftcare.io", "password": "Password123!"})
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
 
-    # 3. Add Availability Slot via /me (provider self-management)
-    avail_payload = {"weekday": 0, "start_time": "09:00", "end_time": "17:00"}
-    avail_res = await client.post("/api/v1/providers/me/availability", json=avail_payload, headers=headers)
+    # 3. Admin adds Availability Slot for provider via /{provider_id}/availability
+    avail_payload = {
+        "weekday": 0,  # Monday
+        "start_time": "09:00",
+        "end_time": "17:00"
+    }
+    avail_res = await client.post(f"/api/v1/providers/{provider_id}/availability", json=avail_payload, headers=admin_headers)
     assert avail_res.status_code == 201
     assert avail_res.json()["start_time"] == "09:00:00"
 
@@ -63,6 +79,7 @@ async def test_provider_crud_and_availability_flow(client: AsyncClient):
     items = list_res.json()["items"]
     assert len(items) == 1
     assert items[0]["license_number"] == "CARD-99182"
+
 
     # 5. Overlapping availability slot returns 409 Conflict
     overlap_payload = {"weekday": 0, "start_time": "11:00", "end_time": "15:00"}
@@ -109,11 +126,14 @@ async def test_provider_crud_and_availability_flow(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_provider_update_own_profile(client: AsyncClient):
-    headers = await _register_login(client, "dr.update@swiftcare.io", "provider", "Dr Update")
+    admin_headers = await _register_login(client, "admin.update@swiftcare.io", "admin", "Admin")
     await client.post("/api/v1/providers", json={
+        "email": "dr.update@swiftcare.io", "password": "Password123!", "full_name": "Dr Update",
         "specialization": "Neurology", "license_number": "NEURO-001",
         "consultation_fee": "300.00", "default_slot_minutes": 30,
-    }, headers=headers)
+    }, headers=admin_headers)
+    login = await client.post("/api/v1/auth/login", json={"email": "dr.update@swiftcare.io", "password": "Password123!"})
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
 
     patch_res = await client.patch("/api/v1/providers/me", json={
         "specialization": "Pediatrics", "consultation_fee": "200.00",

@@ -11,7 +11,19 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 
 
+async def init_db() -> None:
+    from sqlalchemy import text
+    from app.db.engine import engine
+    from app.db.base import RelayBase
+    import app.db.models  # noqa: F401 — register all models
+    async with engine.begin() as conn:
+        await conn.execute(text("CREATE SCHEMA IF NOT EXISTS relay"))
+        await conn.run_sync(RelayBase.metadata.create_all)
+    logger.info("DB schema ready")
+
+
 async def main() -> None:
+    await init_db()
     settings = get_settings()
     redis = aioredis.from_url(settings.redis_url)
     try:
@@ -22,5 +34,8 @@ async def main() -> None:
 
 if __name__ == "__main__":
     settings = get_settings()
-    ensure_bucket(get_s3_client(), settings.s3_bucket)
+    try:
+        ensure_bucket(get_s3_client(), settings.s3_bucket)
+    except Exception as e:
+        logger.warning("S3 unavailable at startup — PDF uploads will fail: %s", e)
     asyncio.run(main())

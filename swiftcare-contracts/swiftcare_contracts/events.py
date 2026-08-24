@@ -43,3 +43,17 @@ class PrescriptionCreatedEvent(BaseModel):
     patient_id: int
     provider_id: int
     created_at: datetime
+    # denormalized so relay never needs to query core DB
+    patient_name: str
+    patient_email: str
+    provider_name: str
+    drug_names: list[str]
+
+
+class PasswordResetRequestedEvent(BaseModel):
+    event_id: UUID
+    event_type: str = "auth.password_reset_requested"
+    schema_version: int = 1
+    user_email: str
+    user_name: str
+    reset_token: str  # raw token — notify sends this in email, core stores only hash

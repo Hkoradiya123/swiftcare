@@ -41,3 +41,7 @@ async def health_check():
         "app_name": settings.app_name,
         "environment": settings.environment,
     }
+    
+@app.get("/")
+async def root():
+    return {"message": "Welcome to the SwiftCare API v1.0.0 - Please use /docs for API documentation."}

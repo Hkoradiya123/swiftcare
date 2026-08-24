@@ -1,7 +1,7 @@
 import os
 from logging.config import fileConfig
 from dotenv import load_dotenv
-from sqlalchemy import engine_from_config, pool, text
+from sqlalchemy import pool, text
 from alembic import context
 
 load_dotenv()
@@ -40,24 +40,33 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def run_migrations_online() -> None:
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
-    with connectable.connect() as connection:
-        connection.execute(text("CREATE SCHEMA IF NOT EXISTS relay"))
-        connection.commit()
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata,
-            include_schemas=True,
-            include_name=include_name,
-            version_table_schema="relay",
+async def run_migrations_online_async() -> None:
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    async_url = os.getenv("DATABASE_URL", "")
+    connectable = create_async_engine(async_url, poolclass=pool.NullPool)
+
+    async with connectable.connect() as connection:
+        await connection.execute(text("CREATE SCHEMA IF NOT EXISTS relay"))
+        await connection.commit()
+        await connection.run_sync(
+            lambda conn: context.configure(
+                connection=conn,
+                target_metadata=target_metadata,
+                include_schemas=True,
+                include_name=include_name,
+                version_table_schema="relay",
+            )
         )
-        with context.begin_transaction():
-            context.run_migrations()
+        async with connection.begin():
+            await connection.run_sync(lambda conn: context.run_migrations())
+
+    await connectable.dispose()
+
+
+def run_migrations_online() -> None:
+    import asyncio
+    asyncio.run(run_migrations_online_async())
 
 
 if context.is_offline_mode():

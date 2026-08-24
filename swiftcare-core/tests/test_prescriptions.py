@@ -52,12 +52,13 @@ async def test_create_prescription_success(client: AsyncClient, provider_data, p
 
 @pytest.mark.asyncio
 async def test_allergy_blocks_prescription_returns_409(client: AsyncClient, provider_data, patient_data):
-    # Record drug allergy first (nested under patient)
-    allergy_res = await client.post(
-        f"/api/v1/patients/{patient_data['patient_id']}/allergies",
-        headers=provider_data["headers"],
-        json={"allergen": "Amoxicillin", "allergy_type": "drug", "severity": "severe"},
-    )
+    # Record drug allergy first
+    allergy_res = await client.post("/api/v1/allergies", headers=provider_data["headers"], json={
+        "patient_id": patient_data["patient_id"],
+        "allergen": "Amoxicillin",
+        "allergy_type": "drug",
+        "severity": "severe",
+    })
     assert allergy_res.status_code == 201, allergy_res.text
 
     appt_id = await _completed_appointment(client, provider_data, patient_data)

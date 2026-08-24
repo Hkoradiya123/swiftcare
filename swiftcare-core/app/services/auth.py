@@ -1,4 +1,5 @@
 from datetime import timedelta
+from uuid import uuid4
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,10 +13,11 @@ from app.core.security import (
     verify_password,
 )
 from app.models.enums import UserRole
+from app.models.password_reset_token import PasswordResetToken
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.repositories.user import UserRepository
-from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse
+from app.schemas.auth import ChangePasswordRequest, ForgotPasswordRequest, LoginRequest, RegisterRequest, ResetPasswordRequest, TokenResponse
 from app.utils.time import utcnow
 
 
@@ -81,3 +83,61 @@ class AuthService:
         if rt:
             rt.revoked = True
             await self.db.commit()
+
+    async def forgot_password(self, data: ForgotPasswordRequest) -> None:
+        import hashlib, secrets
+        from app.events.publisher import publish
+        from swiftcare_contracts.events import PasswordResetRequestedEvent
+
+        user = await self.repo.get_by_email(data.email)
+        if not user:
+            return  # silent — don't leak whether email exists
+
+        raw = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw.encode()).hexdigest()
+
+        prt = PasswordResetToken(
+            user_id=user.id,
+            token_hash=token_hash,
+            expires_at=utcnow() + timedelta(hours=1),
+        )
+        self.db.add(prt)
+        await self.db.commit()
+
+        # best-effort — token already saved; if Redis is down the email just won't send
+        try:
+            await publish(PasswordResetRequestedEvent(
+                event_id=uuid4(),
+                user_email=user.email,
+                user_name=user.full_name,
+                reset_token=raw,
+            ))
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Redis unavailable — password reset email not queued for %s", user.email
+            )
+
+    async def change_password(self, user: User, data: ChangePasswordRequest) -> None:
+        if not verify_password(data.current_password, user.hashed_password):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
+        user.hashed_password = hash_password(data.new_password)
+        await self.db.commit()
+
+    async def reset_password(self, data: ResetPasswordRequest) -> None:
+        import hashlib
+        token_hash = hashlib.sha256(data.token.encode()).hexdigest()
+
+        result = await self.db.execute(
+            select(PasswordResetToken).where(PasswordResetToken.token_hash == token_hash)
+        )
+        prt = result.scalar_one_or_none()
+
+        if not prt or prt.used or prt.expires_at < utcnow():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired reset token")
+
+        user_result = await self.db.execute(select(User).where(User.id == prt.user_id))
+        user = user_result.scalar_one()
+        user.hashed_password = hash_password(data.new_password)
+        prt.used = True
+        await self.db.commit()
