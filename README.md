@@ -92,7 +92,8 @@ swiftcare/
 │
 ├── swiftcare-contracts/          # Shared Pydantic event schemas
 ├── docs/                         # Technical specifications and architectural references
-├── docker-compose.yml            # Multi-service container orchestration
+├── docker-compose.dev.yml        # Dev: hot-reload, MailHog, MinIO (local mocks)
+├── docker-compose.prod.yml       # Prod: real SMTP, real S3, secrets via env vars
 ├── main.py                       # Local multi-process runner (Core + Notify)
 ├── patient_cli.py                # Patient terminal client
 ├── provider_cli.py               # Provider terminal client
@@ -152,16 +153,57 @@ Global protection via `DualLayerRateLimitMiddleware`:
 
 ### Option A: Running with Docker Compose (Recommended)
 
-Start all backing services (Core DB, Notify DB, Redis, MinIO, MailHog, Core API, Relay Consumer, Celery Worker, and Celery Beat):
+Two compose files — pick one based on your environment:
+
+#### Development (`docker-compose.dev.yml`)
+Uses local mocks — MailHog for email, MinIO for S3, hot-reload enabled. No real credentials needed except OpenAI.
 
 ```bash
-docker-compose up --build
+# Optional: set your OpenAI key in .env first
+echo "OPENAI_API_KEY=sk-..." >> .env
+
+docker compose -f docker-compose.dev.yml up --build
 ```
 
-**Service Endpoints:**
-- **Core API & Swagger UI:** [http://localhost:8000/docs](http://localhost:8000/docs)
-- **MailHog Web UI:** [http://localhost:8025](http://localhost:8025)
-- **MinIO Console:** [http://localhost:9001](http://localhost:9001) (`swiftcare` / `swiftcare123`)
+| Service | URL | Credentials |
+| :--- | :--- | :--- |
+| Core API & Swagger | http://localhost:8000/docs | — |
+| MailHog (caught emails) | http://localhost:8025 | — |
+| MinIO Console | http://localhost:9001 | `swiftcare` / `swiftcare123` |
+
+#### Production (`docker-compose.prod.yml`)
+Uses real SMTP, real AWS S3, and strong secrets — all supplied via environment variables. Create a `.env` file with the following before running:
+
+```bash
+# Database
+CORE_DB_USER=core
+CORE_DB_PASSWORD=<strong-password>
+NOTIFY_DB_USER=notify
+NOTIFY_DB_PASSWORD=<strong-password>
+
+# Security
+SECRET_KEY=<random-64-char-string>
+
+# OpenAI
+OPENAI_API_KEY=sk-...
+
+# Email (real SMTP)
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your@email.com
+SMTP_PASS=your-app-password
+MAIL_FROM=noreply@yourdomain.com
+
+# S3 (real AWS — leave S3_ENDPOINT empty for AWS)
+S3_ENDPOINT=
+S3_ACCESS_KEY=<aws-access-key>
+S3_SECRET_KEY=<aws-secret-key>
+S3_BUCKET=swiftcare-docs
+```
+
+```bash
+docker compose -f docker-compose.prod.yml up --build
+```
 
 ---
 
