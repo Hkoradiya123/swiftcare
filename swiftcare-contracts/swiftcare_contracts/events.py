@@ -35,11 +35,21 @@ class AppointmentScheduledEvent(BaseModel):
     provider_name: str
 
 
+class PrescriptionItemData(BaseModel):
+    drug_name: str
+    dosage_amount: float
+    dosage_unit: str
+    frequency_per_day: int
+    duration_days: int
+    instructions: Optional[str] = None
+
+
 class PrescriptionCreatedEvent(BaseModel):
     event_id: UUID
     event_type: str = "prescription.created"
     schema_version: int = 1
     prescription_id: int
+    appointment_id: int
     patient_id: int
     provider_id: int
     created_at: datetime
@@ -47,7 +57,7 @@ class PrescriptionCreatedEvent(BaseModel):
     patient_name: str
     patient_email: str
     provider_name: str
-    drug_names: list[str]
+    items: list[PrescriptionItemData]
 
 
 class PasswordResetRequestedEvent(BaseModel):
