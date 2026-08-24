@@ -1,5 +1,5 @@
 from typing import Optional
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -85,7 +85,7 @@ class AllergyRepository(BaseRepository[Allergy]):
             select(Allergy.allergen_normalized).where(
                 Allergy.patient_id == patient_id,
                 Allergy.deleted_at.is_(None),
-                Allergy.allergy_type == AllergyType.DRUG.value,
+                text("allergy_type = 'drug'"),  # native_enum binds .name not .value; bypass with literal
             )
         )
         return {row[0] for row in result.all()}
