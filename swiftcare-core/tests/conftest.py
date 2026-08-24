@@ -41,6 +41,39 @@ async def setup_test_db():
         await conn.run_sync(Base.metadata.drop_all)
 
 
+class _PipelineMock:
+    def __init__(self, stub):
+        self._stub = stub
+        self._cmds = []
+
+    def get(self, key: str):
+        self._cmds.append(("get", key))
+        return self
+
+    def incr(self, key: str):
+        self._cmds.append(("incr", key))
+        return self
+
+    def expire(self, key: str, ttl: int):
+        self._cmds.append(("expire", key, ttl))
+        return self
+
+    async def execute(self):
+        results = []
+        for cmd in self._cmds:
+            op = cmd[0]
+            if op == "get":
+                val = self._stub._counters.get(cmd[1], 0)
+                results.append(str(val) if val else None)
+            elif op == "incr":
+                self._stub._counters[cmd[1]] += 1
+                results.append(self._stub._counters[cmd[1]])
+            elif op == "expire":
+                results.append(True)
+        self._cmds = []
+        return results
+
+
 class _CountingRedis:
     """
     Minimal Redis stub with real INCR accumulation semantics.
@@ -49,6 +82,13 @@ class _CountingRedis:
     """
     def __init__(self):
         self._counters: dict = defaultdict(int)
+
+    def pipeline(self):
+        return _PipelineMock(self)
+
+    async def get(self, key: str):
+        val = self._counters.get(key, 0)
+        return str(val) if val else None
 
     async def incr(self, key: str) -> int:
         self._counters[key] += 1
