@@ -1,5 +1,10 @@
 from functools import lru_cache
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_here = Path(__file__).parent
+_core_env = _here.parents[1] / ".env"   # swiftcare-core/.env
+_root_env = _here.parents[2] / ".env"   # repo root .env
 
 
 class Settings(BaseSettings):
@@ -9,7 +14,7 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/prahar_care"
-    
+
     # Security
     secret_key: str = "dev-secret-key-change-in-production-1234567890!"
     algorithm: str = "HS256"
@@ -27,8 +32,13 @@ class Settings(BaseSettings):
     mail_from: str = "noreply@swiftcare.io"
     mock_smtp: bool = False
 
+    # OpenAI
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o-mini"
+    openai_embedding_model: str = "text-embedding-3-small"
+
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=[str(_root_env), str(_core_env)],  # core overrides root
         env_file_encoding="utf-8",
         extra="ignore"
     )

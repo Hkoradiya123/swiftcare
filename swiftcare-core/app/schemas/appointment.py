@@ -42,6 +42,11 @@ class AppointmentRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AppointmentComplete(BaseModel):
+    summary: str = Field(min_length=1, max_length=5000)
+    diagnosis: Optional[str] = Field(default=None, max_length=2000)
+
+
 class AppointmentFilter(BaseModel):
     patient_id: Optional[int] = None
     provider_id: Optional[int] = None

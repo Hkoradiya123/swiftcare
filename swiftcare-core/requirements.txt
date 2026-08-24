@@ -11,6 +11,13 @@ bcrypt>=4.1.2
 python-jose[cryptography]>=3.3.0
 redis>=5.0.3
 
+# AI Dependencies
+openai>=1.40.0
+langgraph>=0.2.0
+langchain-openai>=0.1.0
+langchain-core>=0.2.0
+pgvector>=0.3.0
+
 # Testing Dependencies
 pytest>=8.0.2
 pytest-asyncio>=0.23.5
