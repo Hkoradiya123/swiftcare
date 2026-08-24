@@ -1,0 +1,84 @@
+services:
+  core-db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${CORE_DB_NAME:-swiftcare_core}
+      POSTGRES_USER: ${CORE_DB_USER}
+      POSTGRES_PASSWORD: ${CORE_DB_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${CORE_DB_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - core-db-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  notify-db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${NOTIFY_DB_NAME:-swiftcare_notify}
+      POSTGRES_USER: ${NOTIFY_DB_USER}
+      POSTGRES_PASSWORD: ${NOTIFY_DB_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${NOTIFY_DB_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - notify-db-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  swiftcare-core:
+    build: ./swiftcare-core
+    ports:
+      - "8000:8000"
+    depends_on:
+      core-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${CORE_DB_USER}:${CORE_DB_PASSWORD}@core-db:5432/${CORE_DB_NAME:-swiftcare_core}
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+    restart: unless-stopped
+
+  swiftcare-notify:
+    build: ./swiftcare-notify
+    depends_on:
+      notify-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${NOTIFY_DB_USER}:${NOTIFY_DB_PASSWORD}@notify-db:5432/${NOTIFY_DB_NAME:-swiftcare_notify}
+      REDIS_URL: redis://redis:6379/0
+      CONSUMER_NAME: notify-1
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      MAIL_FROM: ${MAIL_FROM}
+      MOCK_SMTP: "false"
+    restart: unless-stopped
+
+volumes:
+  core-db-data:
+  notify-db-data:
