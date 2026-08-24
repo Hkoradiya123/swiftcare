@@ -2,12 +2,14 @@ import asyncio
 import logging
 import redis.asyncio as aioredis
 
+from app.core.logging_config import setup_logging
+setup_logging("swiftcare-notify")
+
 from app.core.config import get_settings
 from app.db.engine import AsyncSessionLocal
 from app.consumers.runner import run_consumer
 from app.storage.s3 import ensure_bucket, get_s3_client
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
 logger = logging.getLogger(__name__)
 
 REMINDER_INTERVAL = 300  # 5 minutes, same cadence as Celery beat schedule
