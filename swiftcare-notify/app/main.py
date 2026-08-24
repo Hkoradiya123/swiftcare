@@ -1,7 +1,5 @@
 import asyncio
 import logging
-import subprocess
-import sys
 import redis.asyncio as aioredis
 
 from app.core.config import get_settings
@@ -11,6 +9,8 @@ from app.storage.s3 import ensure_bucket, get_s3_client
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
 logger = logging.getLogger(__name__)
+
+REMINDER_INTERVAL = 300  # 5 minutes, same cadence as Celery beat schedule
 
 
 async def init_db() -> None:
@@ -24,25 +24,26 @@ async def init_db() -> None:
     logger.info("DB schema ready")
 
 
+async def reminder_loop() -> None:
+    from app.tasks.reminders import _send_reminders_async
+    while True:
+        try:
+            await _send_reminders_async(AsyncSessionLocal)
+        except Exception:
+            logger.exception("Reminder run failed")
+        await asyncio.sleep(REMINDER_INTERVAL)
+
+
 async def main() -> None:
     await init_db()
     settings = get_settings()
     redis = aioredis.from_url(settings.redis_url)
-
-    celery_worker = subprocess.Popen(
-        [sys.executable, "-m", "celery", "-A", "app.celery_app", "worker", "--loglevel=info"],
-    )
-    celery_beat = subprocess.Popen(
-        [sys.executable, "-m", "celery", "-A", "app.celery_app", "beat", "--loglevel=info"],
-    )
-    logger.info("Celery worker and beat started")
-
+    asyncio.create_task(reminder_loop())
+    logger.info("Reminder loop started (every %ds)", REMINDER_INTERVAL)
     try:
         await run_consumer(redis, AsyncSessionLocal, consumer_name=settings.consumer_name)
     finally:
         await redis.aclose()
-        celery_worker.terminate()
-        celery_beat.terminate()
 
 
 if __name__ == "__main__":
