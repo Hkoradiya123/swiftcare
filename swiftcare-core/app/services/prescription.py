@@ -7,14 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 try:
-    from swiftcare_contracts.events import PrescriptionCreatedEvent
+    from swiftcare_contracts.events import PrescriptionCreatedEvent, PrescriptionItemData
 except ModuleNotFoundError:
     import sys
     from pathlib import Path
     contracts_dir = str(Path(__file__).resolve().parents[3])
     if contracts_dir not in sys.path:
         sys.path.append(contracts_dir)
-    from swiftcare_contracts.events import PrescriptionCreatedEvent
+    from swiftcare_contracts.events import PrescriptionCreatedEvent, PrescriptionItemData
 
 from app.events.publisher import publish
 from app.models.allergy import Allergy
@@ -84,13 +84,21 @@ class PrescriptionService:
         await publish(PrescriptionCreatedEvent(
             event_id=uuid4(),
             prescription_id=rx.id,
+            appointment_id=data.appointment_id,
             patient_id=data.patient_id,
             provider_id=provider_id,
             created_at=datetime.now(timezone.utc),
             patient_name=patient_row.user.full_name,
             patient_email=patient_row.user.email,
             provider_name=provider_row.user.full_name,
-            drug_names=[item.drug_name for item in data.items],
+            items=[PrescriptionItemData(
+                drug_name=item.drug_name,
+                dosage_amount=float(item.dosage_amount),
+                dosage_unit=item.dosage_unit,
+                frequency_per_day=item.frequency_per_day,
+                duration_days=item.duration_days,
+                instructions=item.instructions,
+            ) for item in data.items],
         ))
 
         return await self.repo.get_by_id(rx.id)

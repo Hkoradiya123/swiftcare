@@ -251,9 +251,11 @@ def list_appointments():
         print("  No appointments found.")
         return
     for a in res:
-        print(f"\n  [{a['id']}]  {a['scheduled_start']}  →  {a['scheduled_end']}")
-        print(f"       Patient ID: {a['patient_id']}  |  Status: {a['status']}  |  Type: {a['appointment_type']}")
-        print(f"       Reason: {a['reason']}")
+        print(f"\n  Appointment ID : {a['id']}")
+        print(f"  Time           : {a['scheduled_start']}  →  {a['scheduled_end']}")
+        print(f"  Status         : {a['status']}  |  {a['appointment_type']}")
+        print(f"  Patient ID     : {a['patient_id']}")
+        print(f"  Reason         : {a['reason']}")
 
 
 def get_appointment():
@@ -333,20 +335,25 @@ def create_prescription():
     appt_id = _input("Appointment ID (optional)")
 
     items = []
-    print("  Add drugs (enter blank drug name to finish):")
+    print("  Add medications (blank drug name to finish):")
     while True:
         drug = _input("  Drug name (blank to finish)")
         if not drug:
             break
-        dosage = _required("  Dosage (e.g. 500)")
-        unit = _required("  Unit (mg/ml/mcg/units)")
-        instructions = _required("  Instructions (e.g. twice daily after meals)")
+        amount   = float(_required("  Dosage amount (e.g. 500)"))
+        unit     = _required("  Unit (mg / ml / tablet)")
+        freq     = int(_required("  Frequency per day (e.g. 2)"))
+        days     = int(_required("  Duration in days (e.g. 7)"))
+        instr    = _input("  Instructions (optional)")
         items.append({
-            "drug_name": drug,
-            "dosage": dosage,
-            "dosage_unit": unit,
-            "instructions": instructions,
+            "drug_name":         drug,
+            "dosage_amount":     amount,
+            "dosage_unit":       unit,
+            "frequency_per_day": freq,
+            "duration_days":     days,
+            "instructions":      instr or None,
         })
+        print(f"  Added: {drug} {amount}{unit} {freq}×/day for {days}d")
 
     if not items:
         print("  No drugs added. Cancelled.")

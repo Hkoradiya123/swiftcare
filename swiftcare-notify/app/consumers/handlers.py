@@ -8,9 +8,9 @@ from swiftcare_contracts.events import AppointmentCompletedEvent, AppointmentSch
 
 from app.core.config import get_settings
 from app.db.models import AppointmentSlot, DocumentRecord
-from app.documents.renderer import render_visit_summary_pdf
+from app.documents.renderer import render_prescription_pdf, render_visit_summary_pdf
 from app.mail.sender import send_email
-from app.storage.s3 import generate_presigned_url, get_s3_client, upload_pdf
+from app.storage.s3 import get_s3_client, upload_pdf
 
 logger = logging.getLogger(__name__)
 
@@ -40,16 +40,18 @@ async def handle_appointment_completed(event: AppointmentCompletedEvent, session
 
     # Email is best-effort — S3 upload + DB record must not be lost if SMTP is down
     try:
-        url = generate_presigned_url(s3, settings.s3_bucket, key)
         await send_email(
             to=event.patient_email,
             subject="Your visit summary is ready — SwiftCare",
             body=(
-                f"Hello {event.patient_name},\n\n"
-                f"Your visit summary from {event.completed_at.strftime('%Y-%m-%d')} is ready.\n\n"
-                f"Download (expires in 1 hour): {url}\n\n"
+                f"Hello {event.patient_name.split()[0]},\n\n"
+                f"Your visit summary from {event.completed_at.strftime('%B %d, %Y')} is attached.\n\n"
+                f"Provider: {event.provider_name}\n"
+                f"Reason: {event.reason}\n\n"
                 f"— SwiftCare"
             ),
+            pdf_attachment=pdf_bytes,
+            attachment_name=f"visit_summary_{event.appointment_id}.pdf",
         )
     except Exception as e:
         # ponytail: log-and-continue; Step 9 Celery Beat picks up unsent emails via email_sent flag
@@ -91,18 +93,41 @@ async def handle_appointment_scheduled(event: AppointmentScheduledEvent, session
 
 
 async def handle_prescription_created(event: PrescriptionCreatedEvent, session: AsyncSession) -> None:
-    drugs = ", ".join(event.drug_names) if event.drug_names else "see your account for details"
+    settings = get_settings()
+
+    pdf_bytes = render_prescription_pdf({
+        "patient_name": event.patient_name,
+        "provider_name": event.provider_name,
+        "prescription_id": event.prescription_id,
+        "issued_at": event.created_at.strftime("%B %d, %Y"),
+        "items": [i.model_dump() for i in event.items],
+    })
+
+    s3 = get_s3_client()
+    key = f"prescriptions/{event.patient_id}/{event.prescription_id}_{uuid4().hex[:8]}.pdf"
+    upload_pdf(s3, settings.s3_bucket, key, pdf_bytes)
+
+    session.add(DocumentRecord(
+        appointment_id=event.appointment_id,
+        doc_type="prescription",
+        s3_bucket=settings.s3_bucket,
+        s3_key=key,
+    ))
+
+    drug_list = ", ".join(i.drug_name for i in event.items) if event.items else "see attached PDF"
     try:
         await send_email(
             to=event.patient_email,
             subject="Your prescription is ready — SwiftCare",
             body=(
-                f"Hello {event.patient_name},\n\n"
-                f"{event.provider_name} has created a prescription for you.\n\n"
-                f"Medications: {drugs}\n\n"
-                f"Log in to your SwiftCare account to view full details.\n\n"
+                f"Hello {event.patient_name.split()[0]},\n\n"
+                f"Dr. {event.provider_name} has issued a prescription for you.\n\n"
+                f"Medications: {drug_list}\n\n"
+                f"Your prescription PDF is attached.\n\n"
                 f"— SwiftCare"
             ),
+            pdf_attachment=pdf_bytes,
+            attachment_name=f"prescription_{event.prescription_id}.pdf",
         )
     except Exception as e:
         logger.warning("Prescription email failed for rx=%s: %s", event.prescription_id, e)

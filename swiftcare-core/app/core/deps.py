@@ -9,6 +9,7 @@ from app.models.user import User
 from app.repositories.user import UserRepository
 
 bearer_scheme = HTTPBearer()
+optional_bearer_scheme = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
@@ -34,6 +35,26 @@ async def get_current_user(
             detail="User not found or account inactive",
         )
     return user
+
+
+async def get_optional_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(optional_bearer_scheme),
+    db: AsyncSession = Depends(get_db),
+) -> User | None:
+    """Like get_current_user but returns None instead of 401 when no token provided."""
+    if not credentials:
+        return None
+    try:
+        payload = decode_token(credentials.credentials)
+        user_id = payload.get("sub")
+        if not user_id:
+            return None
+        user = await UserRepository(db).get_by_id(int(user_id))
+        if not user or not user.is_active or user.deleted_at:
+            return None
+        return user
+    except Exception:
+        return None
 
 
 def require_role(*roles: UserRole):

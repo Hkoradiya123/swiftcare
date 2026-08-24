@@ -6,7 +6,13 @@ from app.core.config import get_settings
 logger = logging.getLogger(__name__)
 
 
-async def send_email(to: str, subject: str, body: str) -> None:
+async def send_email(
+    to: str,
+    subject: str,
+    body: str,
+    pdf_attachment: bytes | None = None,
+    attachment_name: str = "document.pdf",
+) -> None:
     s = get_settings()
 
     if s.mock_smtp:
@@ -19,6 +25,8 @@ async def send_email(to: str, subject: str, body: str) -> None:
     msg["To"] = to
     msg["Subject"] = subject
     msg.set_content(body)
+    if pdf_attachment:
+        msg.add_attachment(pdf_attachment, maintype="application", subtype="pdf", filename=attachment_name)
 
     kwargs: dict = {"start_tls": False}
     if s.smtp_user:
