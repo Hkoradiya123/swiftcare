@@ -69,5 +69,5 @@ coverage.xml
 CLAUDE.md
 AGENT_LOG.md
 
-/Intern-Project2-Patient-Care-Assistant-Requirements.pdfswiftcare-notify/celerybeat-schedule-shm
-swiftcare-notify/celerybeat-schedule-wal
+celerybeat-schedule-shm
+celerybeat-schedule-wal
