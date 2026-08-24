@@ -123,6 +123,23 @@ async def get_provider(
     return await ProviderService(db).get(provider_id)
 
 
+@router.get("/{provider_id}/availability", response_model=list[ProviderAvailabilityRead])
+async def get_provider_availability(
+    provider_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> list[ProviderAvailabilityRead]:
+    return await ProviderService(db).list_availabilities(provider_id)
+
+
+@router.get("/{provider_id}/slots", response_model=list[dict])
+async def get_provider_open_slots(
+    provider_id: int,
+    date: str,
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    return await ProviderService(db).get_open_slots(provider_id, date)
+
+
 @router.post(
     "/{provider_id}/availability",
     response_model=ProviderAvailabilityRead,

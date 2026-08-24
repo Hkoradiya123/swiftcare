@@ -1,3 +1,4 @@
+from typing import Optional
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from app.models.enums import UserRole
 
@@ -52,5 +53,6 @@ class UserRead(BaseModel):
     full_name: str
     role: UserRole
     is_active: bool
+    profile_id: Optional[int] = None  # patient_id or provider_id depending on role
 
     model_config = {"from_attributes": True}

@@ -31,8 +31,26 @@ async def logout(data: RefreshRequest, db: AsyncSession = Depends(get_db)) -> No
 
 
 @router.get("/me", response_model=UserRead)
-async def me(current_user: User = Depends(get_current_user)) -> User:
-    return current_user
+async def me(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> UserRead:
+    from app.repositories.patient import PatientRepository
+    from app.repositories.provider import ProviderRepository
+
+    profile_id = None
+    if current_user.role == "patient":
+        p = await PatientRepository(db).get_by_user_id(current_user.id)
+        profile_id = p.id if p else None
+    elif current_user.role == "provider":
+        p = await ProviderRepository(db).get_by_user_id(current_user.id)
+        profile_id = p.id if p else None
+
+    return UserRead(
+        id=current_user.id,
+        email=current_user.email,
+        full_name=current_user.full_name,
+        role=current_user.role,
+        is_active=current_user.is_active,
+        profile_id=profile_id,
+    )
 
 
 @router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)

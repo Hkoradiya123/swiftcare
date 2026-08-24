@@ -79,13 +79,14 @@ async def test_db_level_race_conflict_returns_409(client: AsyncClient, provider_
 
 
 @pytest.mark.asyncio
-async def test_patient_cannot_create_appointment_returns_403(client: AsyncClient, provider_data, patient_data):
+async def test_patient_can_create_own_appointment(client: AsyncClient, provider_data, patient_data):
     payload = appt_payload(
         provider_data["provider_id"], patient_data["patient_id"],
         "2026-09-01T11:00:00+00:00", "2026-09-01T11:30:00+00:00",
     )
     res = await client.post("/api/v1/appointments", json=payload, headers=patient_data["headers"])
-    assert res.status_code == 403
+    assert res.status_code == 201
+    assert res.json()["patient_id"] == patient_data["patient_id"]
 
 
 @pytest.mark.asyncio

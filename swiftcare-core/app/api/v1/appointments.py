@@ -13,7 +13,7 @@ router = APIRouter(prefix="/appointments", tags=["appointments"])
 
 
 @router.post("", response_model=AppointmentRead, status_code=status.HTTP_201_CREATED,
-             dependencies=[Depends(require_role(UserRole.PROVIDER, UserRole.ADMIN))])
+             dependencies=[Depends(require_role(UserRole.PROVIDER, UserRole.ADMIN, UserRole.PATIENT))])
 async def create(data: AppointmentCreate, db: AsyncSession = Depends(get_db)):
     return await AppointmentService(db).create(data)
 

@@ -1,4 +1,4 @@
-from datetime import time
+from datetime import date, datetime, time, timedelta
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -196,6 +196,45 @@ class ProviderService:
         slot = await self.repo.update_availability(slot)
         await self.db.commit()
         return ProviderAvailabilityRead(id=slot.id, weekday=slot.weekday, start_time=str(slot.start_time), end_time=str(slot.end_time))
+
+    async def get_open_slots(self, provider_id: int, date_str: str) -> list[dict]:
+        from app.repositories.appointment import AppointmentRepository
+
+        provider = await self.repo.get_by_id_with_user(provider_id)
+        if not provider:
+            raise HTTPException(status_code=404, detail="Provider not found")
+
+        try:
+            target_date = date.fromisoformat(date_str)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format, use YYYY-MM-DD")
+
+        weekday = target_date.weekday()  # 0=Monday
+        schedule = await self.repo.get_availabilities_by_weekday(provider_id, weekday)
+        if not schedule:
+            return []
+
+        slot_minutes = provider.default_slot_minutes
+        booked = await AppointmentRepository(self.db).list_filtered(
+            provider_id=provider_id, status=None, date=date_str, offset=0, limit=200
+        )
+        booked_ranges = [(a.scheduled_start, a.scheduled_end) for a in booked]
+
+        open_slots = []
+        for shift in schedule:
+            cursor = datetime.combine(target_date, shift.start_time)
+            end_of_shift = datetime.combine(target_date, shift.end_time)
+            while cursor + timedelta(minutes=slot_minutes) <= end_of_shift:
+                slot_end = cursor + timedelta(minutes=slot_minutes)
+                overlap = any(s < slot_end and cursor < e for s, e in booked_ranges)
+                if not overlap:
+                    open_slots.append({
+                        "start": cursor.isoformat(),
+                        "end": slot_end.isoformat(),
+                    })
+                cursor = slot_end
+
+        return open_slots
 
     async def delete_availability(self, provider_id: int, slot_id: int, current_user: User) -> None:
         provider = await self.repo.get_by_id_with_user(provider_id)

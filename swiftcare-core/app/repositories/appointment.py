@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_, or_, String
+from sqlalchemy.sql.expression import cast
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.appointment import Appointment
@@ -53,7 +54,7 @@ class AppointmentRepository(BaseRepository[Appointment]):
         if status:
             stmt = stmt.where(Appointment.status == status)
         if date:
-            stmt = stmt.where(Appointment.scheduled_start.cast(str).startswith(date))
+            stmt = stmt.where(cast(Appointment.scheduled_start, String).startswith(date))
         stmt = stmt.order_by(Appointment.scheduled_start).offset(offset).limit(limit)
         result = await self.db.execute(stmt)
         return list(result.scalars().all())

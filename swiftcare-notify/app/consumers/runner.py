@@ -62,9 +62,26 @@ async def handle_message(msg_id: bytes, fields: dict, redis: Redis, factory: asy
             raise
 
 
+async def _drain_pending(redis: Redis, factory: async_sessionmaker, consumer_name: str) -> None:
+    """On startup, retry any messages from a previous run that were delivered but never ACKed."""
+    while True:
+        pending = await redis.xreadgroup(GROUP, consumer_name, {STREAM: "0"}, count=10)
+        if not pending or not pending[0][1]:
+            break
+        for msg_id, fields in pending[0][1]:
+            try:
+                await handle_message(msg_id, fields, redis, factory)
+            except Exception:
+                # Give up after startup retry — ACK to prevent infinite loop on restart
+                logger.error("Pending msg still failing msg_id=%s — ACKing to prevent loop", msg_id)
+                await redis.xack(STREAM, GROUP, msg_id)
+    logger.info("Pending queue drained")
+
+
 async def run_consumer(redis: Redis, factory: async_sessionmaker, consumer_name: str = "notify-1") -> None:
     await ensure_group(redis)
     logger.info("Consumer %s started, listening on %s", consumer_name, STREAM)
+    await _drain_pending(redis, factory, consumer_name)
 
     while True:
         resp = await redis.xreadgroup(GROUP, consumer_name, {STREAM: ">"}, count=10, block=5000)
