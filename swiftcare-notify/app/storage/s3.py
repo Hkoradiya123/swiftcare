@@ -3,25 +3,38 @@ from botocore.client import Config
 
 from app.core.config import get_settings
 
+_BUCKET_EXISTS_ERRORS = {
+    "BucketAlreadyExists",
+    "BucketAlreadyOwnedByYou",
+    "IllegalLocationConstraintException",  # bucket exists in a different region
+}
+
 
 def get_s3_client():
     s = get_settings()
-    return boto3.client(
-        "s3",
-        endpoint_url=s.s3_endpoint,
+    kwargs = dict(
         aws_access_key_id=s.s3_access_key,
         aws_secret_access_key=s.s3_secret_key,
         config=Config(signature_version="s3v4"),
-        region_name="us-east-1",
+        region_name=s.s3_region,
     )
+    if s.s3_endpoint:
+        kwargs["endpoint_url"] = s.s3_endpoint
+    return boto3.client("s3", **kwargs)
 
 
 def ensure_bucket(client, bucket: str) -> None:
+    s = get_settings()
     try:
-        client.create_bucket(Bucket=bucket)
+        if s.s3_region == "us-east-1":
+            client.create_bucket(Bucket=bucket)
+        else:
+            client.create_bucket(
+                Bucket=bucket,
+                CreateBucketConfiguration={"LocationConstraint": s.s3_region},
+            )
     except Exception as e:
-        msg = str(e)
-        if "BucketAlreadyExists" not in msg and "BucketAlreadyOwnedByYou" not in msg:
+        if not any(err in str(e) for err in _BUCKET_EXISTS_ERRORS):
             raise
 
 
