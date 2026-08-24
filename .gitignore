@@ -69,4 +69,5 @@ coverage.xml
 CLAUDE.md
 AGENT_LOG.md
 
-/Intern-Project2-Patient-Care-Assistant-Requirements.pdf
+celerybeat-schedule-shm
+celerybeat-schedule-wal
