@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     s3_access_key: str = "swiftcare"
     s3_secret_key: str = "swiftcare123"
     s3_bucket: str = "swiftcare-docs"
+    s3_region: str = "ap-south-1"
 
     # SMTP
     smtp_host: str = "localhost"
