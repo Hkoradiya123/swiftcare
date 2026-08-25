@@ -45,28 +45,42 @@ async def run_chat(
 
     llm = ChatOpenAI(model=settings.openai_model, api_key=settings.openai_api_key, temperature=0)
 
+    role_context = "unauthenticated guest"
+    if current_user:
+        role_context = f"{current_user.role} (user_id={current_user.id})"
+
     scheduling_tools = make_scheduling_tools(AsyncSessionLocal, current_user)
     clinical_tools = make_clinical_tools(AsyncSessionLocal, current_user)
 
     scheduling_agent = create_react_agent(
         llm,
         scheduling_tools,
-        prompt="You are a scheduling assistant for a healthcare clinic. "
-               "Help with finding providers, checking availability, and booking appointments. "
-               "IMPORTANT: Before booking any appointment, always call confirm_appointment_details first "
-               "and return the confirmation to the user. Only call book_appointment after the user "
-               "explicitly replies yes or confirm.",
+        prompt=f"You are a scheduling assistant for a healthcare clinic. "
+               f"The current user is: {role_context}. "
+               f"Guests can browse providers and availability but CANNOT book appointments — if a guest tries to book, tell them they must log in first, do not call book_appointment. "
+               f"IMPORTANT: Before booking any appointment, always call confirm_appointment_details first "
+               f"and return the confirmation to the user. Only call book_appointment after the user "
+               f"explicitly replies yes or confirm. "
+               f"If a tool returns an error, surface that error to the user directly — do not retry. "
+               f"Never use markdown formatting — plain text only.",
     )
     clinical_agent = create_react_agent(
         llm,
         clinical_tools,
-        prompt="You are a clinical assistant for healthcare providers. "
-               "Help with patient history, prescriptions, allergies, and medical record queries. "
-               "Always respect patient privacy and only share information with authorised users. "
-               "IMPORTANT: Before creating any prescription, always call confirm_prescription_details first "
-               "and return the confirmation to the user. Only call create_prescription after the user "
-               "explicitly replies yes or confirm.",
+        prompt=f"You are a clinical assistant for healthcare providers. "
+               f"The current user is: {role_context}. "
+               f"Help with patient history, prescriptions, allergies, and medical record queries. "
+               f"Always respect patient privacy and only share information with authorised users. "
+               f"IMPORTANT: Before creating any prescription, always call confirm_prescription_details first "
+               f"and return the confirmation to the user. Only call create_prescription after the user "
+               f"explicitly replies yes or confirm. "
+               f"If a tool returns an error, surface that error to the user directly — do not retry. "
+               f"Never use markdown formatting — plain text only.",
     )
+
+    # Last 6 history entries (3 turns) give sub-agents enough context to handle
+    # confirmation replies ("yes", "confirm") without re-showing the prompt.
+    recent_context = _history_to_messages(history[-6:])
 
     @tool
     async def ask_scheduling(query: str) -> str:
@@ -75,7 +89,7 @@ async def run_chat(
         checking slot availability, and booking appointments.
         """
         result = await scheduling_agent.ainvoke(
-            {"messages": [HumanMessage(content=query)]},
+            {"messages": recent_context + [HumanMessage(content=query)]},
             config=_RECURSION_LIMIT,
         )
         return result["messages"][-1].content
@@ -87,14 +101,10 @@ async def run_chat(
         and any medical record questions. Requires the caller to be authenticated.
         """
         result = await clinical_agent.ainvoke(
-            {"messages": [HumanMessage(content=query)]},
+            {"messages": recent_context + [HumanMessage(content=query)]},
             config=_RECURSION_LIMIT,
         )
         return result["messages"][-1].content
-
-    role_context = "unauthenticated guest"
-    if current_user:
-        role_context = f"{current_user.role} (user_id={current_user.id})"
 
     supervisor = create_react_agent(
         llm,
@@ -103,7 +113,8 @@ async def run_chat(
                f"The current user is a {role_context}. "
                f"Route scheduling requests to ask_scheduling and clinical/medical requests to ask_clinical. "
                f"Guests can only access public information (provider list, availability). "
-               f"Be concise and professional.",
+               f"Be concise and professional. "
+               f"Never use markdown formatting — no bold, no headers, no bullet symbols, plain text only.",
     )
 
     prior_messages = _history_to_messages(history)
