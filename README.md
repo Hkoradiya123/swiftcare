@@ -91,15 +91,16 @@ swiftcare/
 │   └── tests/                    # Consumer idempotency and worker tests
 │
 ├── swiftcare-contracts/          # Shared Pydantic event schemas
+├── scripts/                      # Helper provisioning and CLI tools
+│   ├── create_admin.py           # Admin account provisioner
+│   ├── create_provider.py        # Provider onboarding and schedule generator
+│   ├── patient_cli.py            # Patient terminal client
+│   ├── provider_cli.py           # Provider terminal client
+│   └── test_email.py             # SMTP verification script
 ├── docs/                         # Technical specifications and architectural references
 ├── docker-compose.dev.yml        # Dev: hot-reload, MailHog, MinIO (local mocks)
 ├── docker-compose.prod.yml       # Prod: real SMTP, real S3, secrets via env vars
-├── main.py                       # Local multi-process runner (Core + Notify)
-├── patient_cli.py                # Patient terminal client
-├── provider_cli.py               # Provider terminal client
-├── create_admin.py               # Admin account provisioner
-├── create_provider.py            # Provider onboarding and schedule generator
-└── test_email.py                 # SMTP verification script
+└── main.py                       # Local multi-process runner (Core + Notify)
 ```
 
 ---
@@ -282,15 +283,15 @@ Run these helper scripts from the repository root:
 
 1. **Create an Admin User:**
    ```bash
-   python create_admin.py
+   python scripts/create_admin.py
    ```
 2. **Onboard a Doctor & Default Shift Schedules:**
    ```bash
-   python create_provider.py
+   python scripts/create_provider.py
    ```
 3. **Verify SMTP Configuration:**
    ```bash
-   python test_email.py
+   python scripts/test_email.py
    ```
 
 ---
@@ -301,13 +302,13 @@ SwiftCare includes two complete terminal interfaces for testing and manual workf
 
 - **Patient Portal CLI:**
   ```bash
-  python patient_cli.py
+  python scripts/patient_cli.py
   ```
   *Features: Registration, login, profile view, appointment booking with open slot discovery, medical history review, active prescriptions, and logged allergies.*
 
 - **Provider Portal CLI:**
   ```bash
-  python provider_cli.py
+  python scripts/provider_cli.py
   ```
   *Features: Schedule and shift management (single & bulk availability), checking in appointments, completing visits, issuing prescriptions with dosage validation, and recording patient drug allergies.*
 

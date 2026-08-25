@@ -379,6 +379,36 @@ def list_allergies():
                 print(f"       Reaction: {a['reaction']}")
 
 
+# ── ai chat ───────────────────────────────────────────────────────────────────
+
+def ai_chat():
+    print("\n── AI Assistant ──")
+    print("  Type your message and press Enter. Type 'exit' to return to menu.\n")
+    conversation_id = None
+    while True:
+        try:
+            msg = input("  You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if msg.lower() in ("exit", "quit", ""):
+            break
+        payload = {"message": msg}
+        if conversation_id:
+            payload["conversation_id"] = conversation_id
+        r = requests.post(
+            f"{BASE_URL}/ai/chat",
+            json=payload,
+            headers=_headers(),
+        )
+        if r.status_code == 200:
+            data = r.json()
+            conversation_id = data.get("conversation_id")
+            print(f"\n  AI: {data.get('reply', '')}\n")
+        else:
+            print(f"  Error {r.status_code}: {r.text}")
+
+
 # ── menu ──────────────────────────────────────────────────────────────────────
 
 MENU = {
@@ -409,6 +439,9 @@ MENU = {
     },
     "Allergies": {
         "18": ("List my allergies",     list_allergies),
+    },
+    "AI Assistant": {
+        "19": ("Chat with AI assistant", ai_chat),
     },
 }
 

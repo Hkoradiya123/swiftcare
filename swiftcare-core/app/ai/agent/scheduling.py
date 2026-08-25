@@ -125,4 +125,39 @@ def make_scheduling_tools(session_factory, current_user: User | None) -> list:
                 detail = getattr(e, "detail", str(e))
                 return f"Failed to book appointment: {detail}"
 
-    return [find_providers_by_specialization, get_provider_availability, check_slot_availability, confirm_appointment_details, book_appointment]
+    @tool
+    async def list_all_providers(page: int = 1) -> str:
+        """
+        List available providers with name, specialization, and consultation fee.
+        Returns 20 per page. Check 'total' and 'page'/'total_pages' to decide if more pages exist.
+        """
+        import logging
+        _log = logging.getLogger(__name__)
+        from app.repositories.provider import ProviderRepository
+        page_size = 20
+        try:
+            async with session_factory() as db:
+                repo = ProviderRepository(db)
+                total = await repo.count()
+                providers = await repo.list_all(page, page_size)
+        except Exception as exc:
+            _log.exception("list_all_providers failed page=%s", page)
+            return f"Failed to retrieve providers: {exc}"
+        if not providers:
+            return "No providers found."
+        return json.dumps({
+            "page": page,
+            "total_pages": -(-total // page_size),
+            "total": total,
+            "providers": [
+                {
+                    "provider_id": p.id,
+                    "name": p.user.full_name,
+                    "specialization": p.specialization,
+                    "consultation_fee": float(p.consultation_fee),
+                }
+                for p in providers
+            ],
+        })
+
+    return [list_all_providers, find_providers_by_specialization, get_provider_availability, check_slot_availability, confirm_appointment_details, book_appointment]

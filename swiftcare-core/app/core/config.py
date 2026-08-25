@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     mail_from: str = "noreply@swiftcare.io"
     mock_smtp: bool = False
 
+    # CORS
+    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:8000", "http://localhost:5173"]
+
     # OpenAI
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"

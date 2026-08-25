@@ -21,7 +21,7 @@ def load_env(env_path: Path) -> dict:
     return config
 
 def main():
-    base_dir = Path(__file__).resolve().parent
+    base_dir = Path(__file__).resolve().parent.parent
     env_path = base_dir / ".env"
     env = load_env(env_path)
 
