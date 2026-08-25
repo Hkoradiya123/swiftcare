@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: core
       POSTGRES_PASSWORD: core
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U core"]
+      test: ["CMD-SHELL", "pg_isready -U core -d swiftcare_core"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -20,7 +20,7 @@ services:
       POSTGRES_USER: notify
       POSTGRES_PASSWORD: notify
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U notify"]
+      test: ["CMD-SHELL", "pg_isready -U notify -d swiftcare_notify"]
       interval: 5s
       timeout: 5s
       retries: 5
