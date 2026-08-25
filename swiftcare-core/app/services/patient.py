@@ -1,3 +1,6 @@
+from datetime import date
+from typing import Optional
+
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
