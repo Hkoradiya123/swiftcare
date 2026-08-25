@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 # Add swiftcare-core to sys.path
-ROOT_DIR = Path(__file__).resolve().parent
+ROOT_DIR = Path(__file__).resolve().parent.parent
 CORE_DIR = ROOT_DIR / "swiftcare-core"
 if str(CORE_DIR) not in sys.path:
     sys.path.insert(0, str(CORE_DIR))
