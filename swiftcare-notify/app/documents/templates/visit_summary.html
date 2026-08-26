@@ -29,6 +29,8 @@
   <div class="section">
     <h3>Visit Details</h3>
     <div class="field"><span class="label">Reason:</span> {{ reason }}</div>
+    <div class="field"><span class="label">Summary:</span> {{ summary if summary else "—" }}</div>
+    <div class="field"><span class="label">Diagnosis:</span> {{ diagnosis if diagnosis else "—" }}</div>
     <div class="field"><span class="label">Notes:</span> {{ notes if notes else "—" }}</div>
   </div>
 

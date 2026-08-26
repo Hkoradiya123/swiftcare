@@ -60,6 +60,24 @@ class AppointmentService:
         provider_row = (await self.db.execute(
             select(Provider).options(joinedload(Provider.user)).where(Provider.id == appt.provider_id)
         )).scalar_one()
+
+        provider_briefing = None
+        try:
+            from sqlalchemy import func, select as sa_select
+            from app.models.visit_embedding import VisitEmbedding
+            count = (await self.db.execute(
+                sa_select(func.count()).where(VisitEmbedding.patient_id == appt.patient_id)
+            )).scalar_one()
+            if count > 0:
+                from app.ai.rag.chain import query as rag_query
+                result = await rag_query(
+                    self.db, appt.patient_id,
+                    "Summarize this patient's previous visits, diagnoses, and active medications for the provider."
+                )
+                provider_briefing = result["answer"]
+        except Exception:
+            pass  # briefing is best-effort
+
         await publish(AppointmentScheduledEvent(
             event_id=uuid4(),
             appointment_id=appt.id,
@@ -70,6 +88,8 @@ class AppointmentService:
             patient_name=patient_row.user.full_name,
             patient_email=patient_row.user.email,
             provider_name=provider_row.user.full_name,
+            provider_email=provider_row.user.email,
+            provider_briefing=provider_briefing,
         ))
         return appt
 
@@ -154,6 +174,24 @@ class AppointmentService:
         self.db.add(vs)
         await self.db.flush()  # get vs.id before commit
 
+        try:
+            from app.ai.rag.embedder import embed
+            from app.models.visit_embedding import VisitEmbedding
+            content = f"Visit date: {appt.scheduled_start}\nReason: {appt.reason}\nSummary: {summary}"
+            if diagnosis:
+                content += f"\nDiagnosis: {diagnosis}"
+            if appt.notes:
+                content += f"\nNotes: {appt.notes}"
+            vector = await embed(content)
+            self.db.add(VisitEmbedding(
+                patient_id=appt.patient_id,
+                visit_summary_id=vs.id,
+                content=content,
+                embedding=vector,
+            ))
+        except Exception:
+            pass  # embedding is best-effort, don't fail the completion
+
         patient_row = (await self.db.execute(
             select(Patient).options(joinedload(Patient.user)).where(Patient.id == appt.patient_id)
         )).scalar_one()
@@ -174,6 +212,8 @@ class AppointmentService:
             provider_name=provider_row.user.full_name,
             reason=appt.reason,
             notes=appt.notes,
+            summary=summary,
+            diagnosis=diagnosis,
         ))
         return appt, vs.id
 
