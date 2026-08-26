@@ -115,9 +115,20 @@ def make_clinical_tools(session_factory, current_user: User | None) -> list:
                 for a in appointments
             ])
 
+    async def _patient_id_from_appointment(db, appointment_id: int) -> int | None:
+        """Look up patient_id from appointment — prevents LLM hallucinating wrong patient_id."""
+        from sqlalchemy import select
+        from app.models.appointment import Appointment
+        result = await db.execute(
+            select(Appointment.patient_id).where(
+                Appointment.id == appointment_id,
+                Appointment.deleted_at.is_(None),
+            )
+        )
+        return result.scalar_one_or_none()
+
     @tool
     async def confirm_prescription_details(
-        patient_id: int,
         appointment_id: int,
         drug_name: str,
         dosage_amount: float,
@@ -130,10 +141,10 @@ def make_clinical_tools(session_factory, current_user: User | None) -> list:
         """
         Show prescription details to the user and ask for confirmation BEFORE creating it.
         Always call this first. Only call create_prescription after the user explicitly confirms.
+        Do NOT include patient_id — it is resolved automatically from appointment_id.
         """
         lines = [
             "Please confirm the following prescription details:",
-            f"  Patient ID   : {patient_id}",
             f"  Appointment  : {appointment_id}",
             f"  Drug         : {drug_name}",
             f"  Dose         : {dosage_amount} {dosage_unit}",
@@ -144,12 +155,11 @@ def make_clinical_tools(session_factory, current_user: User | None) -> list:
             lines.append(f"  Instructions : {instructions}")
         if notes:
             lines.append(f"  Notes        : {notes}")
-        lines.append("\nReply **yes** to confirm and create, or **no** to cancel.")
+        lines.append("\nReply yes to confirm and create, or no to cancel.")
         return "\n".join(lines)
 
     @tool
     async def create_prescription(
-        patient_id: int,
         appointment_id: int,
         drug_name: str,
         dosage_amount: float,
@@ -162,14 +172,19 @@ def make_clinical_tools(session_factory, current_user: User | None) -> list:
         """
         Create a prescription for a patient. Provider only.
         IMPORTANT: Always call confirm_prescription_details first and wait for user confirmation.
-        Only call this tool after the user has explicitly replied 'yes' or 'confirm'.
+        Only call this tool after the user has explicitly replied yes or confirm.
+        patient_id is resolved automatically from appointment_id — do NOT ask for it.
         dosage_unit examples: mg, ml, tablet. frequency_per_day: times per day. duration_days: how many days.
-        Checks for drug allergies automatically. Appointment must be in 'completed' status.
+        Checks for drug allergies automatically. Appointment must be in completed status.
         """
         if current_user is None or current_user.role not in ("provider", "admin"):
             return "Only providers can create prescriptions."
 
         async with session_factory() as db:
+            patient_id = await _patient_id_from_appointment(db, appointment_id)
+            if patient_id is None:
+                return f"Appointment {appointment_id} not found."
+
             allowed_id = await _resolve_patient_id(db, patient_id)
             if allowed_id is None:
                 return "Access denied. You do not have a relationship with this patient."
@@ -265,6 +280,39 @@ def make_clinical_tools(session_factory, current_user: User | None) -> list:
                 for a in allergies
             ])
 
+    @tool
+    async def check_in_appointment(appointment_id: int) -> str:
+        """Check in a patient for their appointment. Provider only. Appointment must be in 'scheduled' status."""
+        if current_user is None or current_user.role not in ("provider", "admin"):
+            return "Only providers can check in appointments."
+        async with session_factory() as db:
+            from app.services.appointment import AppointmentService
+            try:
+                appt = await AppointmentService(db).check_in(appointment_id)
+                return json.dumps({"appointment_id": appt.id, "status": appt.status, "checked_in_at": str(appt.checked_in_at)})
+            except Exception as e:
+                return f"Failed to check in: {getattr(e, 'detail', str(e))}"
+
+    @tool
+    async def complete_appointment(appointment_id: int, summary: str, diagnosis: str = "") -> str:
+        """
+        Complete an appointment and record the visit summary. Provider only.
+        Appointment must be in 'checked_in' status.
+        summary: what happened during the visit.
+        diagnosis: optional diagnosis.
+        """
+        if current_user is None or current_user.role not in ("provider", "admin"):
+            return "Only providers can complete appointments."
+        async with session_factory() as db:
+            from app.services.appointment import AppointmentService
+            try:
+                appt, vs_id = await AppointmentService(db).complete(
+                    appointment_id, summary, diagnosis or None
+                )
+                return json.dumps({"appointment_id": appt.id, "status": appt.status, "visit_summary_id": vs_id})
+            except Exception as e:
+                return f"Failed to complete appointment: {getattr(e, 'detail', str(e))}"
+
     return [
         get_my_patients,
         get_patient_appointments,
@@ -273,4 +321,6 @@ def make_clinical_tools(session_factory, current_user: User | None) -> list:
         confirm_prescription_details,
         create_prescription,
         query_patient_history,
+        check_in_appointment,
+        complete_appointment,
     ]

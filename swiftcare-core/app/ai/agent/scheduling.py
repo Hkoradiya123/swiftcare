@@ -6,7 +6,11 @@ from langchain_core.tools import tool
 from app.models.user import User
 
 
-def make_scheduling_tools(session_factory, current_user: User | None) -> list:
+def make_scheduling_tools(
+    session_factory,
+    current_user: User | None,
+    conversation_id: str | None = None,
+) -> list:
     """Scheduling tools. Each tool opens its own session to avoid shared-session concurrency bugs."""
 
     @tool
@@ -69,6 +73,31 @@ def make_scheduling_tools(session_factory, current_user: User | None) -> list:
         Show appointment details to the user and ask for confirmation BEFORE booking.
         Always call this first. Only call book_appointment after the user explicitly confirms.
         """
+        if conversation_id and current_user:
+            # ponytail: override LLM-provided patient_id for patient users — LLM hallucinates it
+            resolved_patient_id = patient_id
+            if current_user.role == "patient":
+                from app.repositories.patient import PatientRepository
+                async with session_factory() as db:
+                    patient = await PatientRepository(db).get_by_user_id(current_user.id)
+                    if patient:
+                        resolved_patient_id = patient.id
+
+            from app.ai.history import save_pending_action
+            await save_pending_action(
+                conversation_id,
+                current_user.id,
+                {
+                    "action_type": "book_appointment",
+                    "provider_id": provider_id,
+                    "patient_id": resolved_patient_id,
+                    "start_datetime": start_datetime,
+                    "end_datetime": end_datetime,
+                    "appointment_type": appointment_type,
+                    "reason": reason,
+                },
+            )
+
         return (
             f"Please confirm the following appointment details:\n"
             f"  Provider ID  : {provider_id}\n"
@@ -77,7 +106,7 @@ def make_scheduling_tools(session_factory, current_user: User | None) -> list:
             f"  Start        : {start_datetime}\n"
             f"  End          : {end_datetime}\n"
             f"  Reason       : {reason}\n\n"
-            f"Reply **yes** to confirm and book, or **no** to cancel."
+            f"Reply **yes** or **confirm** to book, or **no** to cancel."
         )
 
     @tool
@@ -120,10 +149,32 @@ def make_scheduling_tools(session_factory, current_user: User | None) -> list:
             )
             try:
                 appt = await AppointmentService(db).create(data)
+                if conversation_id and current_user:
+                    from app.ai.history import clear_pending_action
+                    await clear_pending_action(conversation_id, current_user.id)
                 return json.dumps({"appointment_id": appt.id, "status": "scheduled"})
             except Exception as e:
                 detail = getattr(e, "detail", str(e))
                 return f"Failed to book appointment: {detail}"
+
+    @tool
+    async def search_provider_by_name(name: str) -> str:
+        """Search providers by name (partial match). Returns id, name, specialization, fee."""
+        from app.repositories.provider import ProviderRepository
+        async with session_factory() as db:
+            providers = await ProviderRepository(db).search_by_name(name)
+        if not providers:
+            return f"No providers found matching: {name}"
+        return json.dumps([
+            {
+                "provider_id": p.id,
+                "name": p.user.full_name,
+                "specialization": p.specialization,
+                "consultation_fee": float(p.consultation_fee),
+                "default_slot_minutes": p.default_slot_minutes,
+            }
+            for p in providers
+        ])
 
     @tool
     async def list_all_providers(page: int = 1) -> str:
@@ -160,4 +211,4 @@ def make_scheduling_tools(session_factory, current_user: User | None) -> list:
             ],
         })
 
-    return [list_all_providers, find_providers_by_specialization, get_provider_availability, check_slot_availability, confirm_appointment_details, book_appointment]
+    return [search_provider_by_name, list_all_providers, find_providers_by_specialization, get_provider_availability, check_slot_availability, confirm_appointment_details, book_appointment]

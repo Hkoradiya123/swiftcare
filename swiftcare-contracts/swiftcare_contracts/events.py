@@ -18,6 +18,8 @@ class AppointmentCompletedEvent(BaseModel):
     provider_name: str
     reason: str
     notes: Optional[str] = None
+    summary: Optional[str] = None
+    diagnosis: Optional[str] = None
 
 
 class AppointmentScheduledEvent(BaseModel):
@@ -33,6 +35,8 @@ class AppointmentScheduledEvent(BaseModel):
     patient_name: str
     patient_email: str
     provider_name: str
+    provider_email: Optional[str] = None
+    provider_briefing: Optional[str] = None
 
 
 class PrescriptionItemData(BaseModel):
