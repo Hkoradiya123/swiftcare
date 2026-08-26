@@ -54,6 +54,22 @@ class ProviderRepository(BaseRepository[Provider]):
         )
         return list(result.scalars().all())
 
+    async def search_by_name(self, name: str) -> List[Provider]:
+        from sqlalchemy import join
+        from app.models.user import User
+        result = await self.db.execute(
+            select(Provider)
+            .join(Provider.user)
+            .where(
+                User.full_name.ilike(f"%{name}%"),
+                Provider.deleted_at.is_(None),
+            )
+            .options(selectinload(Provider.user))
+            .order_by(Provider.id)
+            .limit(10)
+        )
+        return list(result.scalars().all())
+
     async def list_all(self, page: int, size: int) -> List[Provider]:
         offset = (page - 1) * size
         result = await self.db.execute(

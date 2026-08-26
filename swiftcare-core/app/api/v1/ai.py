@@ -37,3 +37,4 @@ async def chat(
         conversation_id=body.conversation_id,
     )
     return {"reply": reply, "conversation_id": conversation_id}
+ 

@@ -24,6 +24,8 @@ async def handle_appointment_completed(event: AppointmentCompletedEvent, session
         "appointment_date": event.completed_at.strftime("%Y-%m-%d %H:%M UTC"),
         "reason": event.reason,
         "notes": event.notes,
+        "summary": event.summary,
+        "diagnosis": event.diagnosis,
     })
 
     s3 = get_s3_client()
@@ -90,6 +92,24 @@ async def handle_appointment_scheduled(event: AppointmentScheduledEvent, session
         )
     except Exception as e:
         logger.warning("Confirmation email failed for appt=%s: %s", event.appointment_id, e)
+
+    if event.provider_briefing and event.provider_email:
+        try:
+            await send_email(
+                to=event.provider_email,
+                subject=f"Returning patient briefing — {event.patient_name} — SwiftCare",
+                body=(
+                    f"Hello Dr. {event.provider_name},\n\n"
+                    f"{event.patient_name} has booked an appointment with you.\n"
+                    f"Date & time: {event.scheduled_start.strftime('%Y-%m-%d at %H:%M UTC')}\n"
+                    f"Reason: {event.reason}\n\n"
+                    f"AI Summary of previous visits:\n"
+                    f"{event.provider_briefing}\n\n"
+                    f"— SwiftCare"
+                ),
+            )
+        except Exception as e:
+            logger.warning("Provider briefing email failed for appt=%s: %s", event.appointment_id, e)
 
 
 async def handle_prescription_created(event: PrescriptionCreatedEvent, session: AsyncSession) -> None:
